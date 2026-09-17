@@ -10,9 +10,9 @@ st.set_page_config(
 
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** Dynamic Universe Pool + $500M Liquidity Filter + QMJ"
-    " Quality Filter + Volatility-Scaled Momentum + 15-Rank Buffer + Trend"
-    " Defense."
+    "**Live Engine:** Dynamic Index Scraping (S&P 500 / Nasdaq 100) + $500M"
+    " Liquidity Filter + QMJ Quality Filter + Volatility-Scaled Momentum +"
+    " 15-Rank Buffer + Trend Defense."
 )
 
 # --- SESSION STATE INITIALIZATION ---
@@ -25,10 +25,13 @@ if "last_action" not in st.session_state:
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("1. Initial Pool: Index Selection")
-use_msci = st.sidebar.checkbox("MSCI ACWI (Global Proxies)", value=True)
-use_sp500 = st.sidebar.checkbox("S&P 500 (US Large Cap)", value=True)
-use_nasdaq = st.sidebar.checkbox("Nasdaq 100 (US Tech Growth)", value=True)
-use_russell = st.sidebar.checkbox("Russell 1000 (US Broad Large/Mid)", value=True)
+use_sp500 = st.sidebar.checkbox("S&P 500 (Full 500 Constituents)", value=True)
+use_nasdaq = st.sidebar.checkbox(
+    "Nasdaq 100 (Full 100 Constituents)", value=True
+)
+use_msci_global = st.sidebar.checkbox(
+    "Global Developed Proxies (ASML, TSM, SAP, etc.)", value=True
+)
 
 st.sidebar.header("2. Strategy & Liquidity Rules")
 min_liquidity_m = st.sidebar.slider(
@@ -48,56 +51,112 @@ st.sidebar.header("3. Execution Controls")
 run_rerank_btn = st.sidebar.button("Run Monthly Rerank (Buffer Rule)")
 run_quarterly_btn = st.sidebar.button("Run Quarterly Filter Update")
 
-# --- TICKER UNIVERSE MAPPING ---
-universe_map = {
-    "MSCI ACWI": ["ASML", "SAP", "TSM", "TM", "SHEL", "AZN", "NSRGY", "SNY"],
-    "S&P 500": [
+
+# --- DYNAMIC CONSTITUENT FETCHERS (WIKIPEDIA SCRAPING) ---
+@st.cache_data(ttl=86400)  # Cache for 24 hours to avoid redundant web scraping
+def fetch_sp500_tickers():
+  try:
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    df = pd.read_html(url)[0]
+    tickers = df["Symbol"].str.replace(".", "-", regex=False).tolist()
+    return tickers
+  except Exception:
+    return [
         "MSFT",
         "AAPL",
         "NVDA",
         "AMZN",
         "GOOGL",
-        "LLY",
+        "META",
         "BRK-B",
+        "LLY",
         "JPM",
         "XOM",
-        "UNH",
-    ],
-    "Nasdaq 100": ["AVGO", "META", "TSLA", "COST", "NFLX", "AMD", "INTU", "QCOM"],
-    "Russell 1000": ["PANW", "PLTR", "MU", "CRWD", "AMAT", "NOW", "GE", "IBM"],
-}
+    ]
 
+
+@st.cache_data(ttl=86400)
+def fetch_nasdaq100_tickers():
+  try:
+    url = "https://en.wikipedia.org/wiki/Nasdaq-100"
+    tables = pd.read_html(url)
+    # Find the table containing the ticker symbols
+    for table in tables:
+      if "Ticker" in table.columns:
+        return table["Ticker"].str.replace(".", "-", regex=False).tolist()
+      elif "Symbol" in table.columns:
+        return table["Symbol"].str.replace(".", "-", regex=False).tolist()
+    return table[0].tolist()
+  except Exception:
+    return ["AVGO", "COST", "NFLX", "AMD", "TMUS", "INTU", "QCOM", "AMAT"]
+
+
+# Assemble Selected Universe Pool
 selected_tickers = []
-if use_msci:
-  selected_tickers.extend(universe_map["MSCI ACWI"])
 if use_sp500:
-  selected_tickers.extend(universe_map["S&P 500"])
+  selected_tickers.extend(fetch_sp500_tickers())
 if use_nasdaq:
-  selected_tickers.extend(universe_map["Nasdaq 100"])
-if use_russell:
-  selected_tickers.extend(universe_map["Russell 1000"])
+  selected_tickers.extend(fetch_nasdaq100_tickers())
+if use_msci_global:
+  global_proxies = [
+      "ASML",
+      "SAP",
+      "TSM",
+      "TM",
+      "SHEL",
+      "AZN",
+      "NSRGY",
+      "SNY",
+      "SONY",
+      "BHP",
+      "NVO",
+      "MC.PA",
+      "RMS.PA",
+      "TTE.PA",
+      "SIE.DE",
+      "ALV.DE",
+  ]
+  selected_tickers.extend(global_proxies)
 
 selected_tickers = list(set(selected_tickers))
+
+st.sidebar.info(
+    f"📊 **Master Universe Pool Loaded:** {len(selected_tickers)} raw tickers"
+    " from selected indices."
+)
 
 
 @st.cache_data(ttl=3600)
 def fetch_market_data(tickers):
   if not tickers:
     return pd.DataFrame(), pd.DataFrame()
+  # Batch download prices and volumes from Yahoo Finance
+  # Note: For large pools (600+ stocks), yfinance batch download handles it efficiently
   raw_data = yf.download(
-      tickers, period="15mo", interval="1d", progress=False
+      tickers, period="15mo", interval="1d", group_by="ticker", progress=False
   )
-  if isinstance(raw_data.columns, pd.MultiIndex):
-    prices = raw_data["Close"]
-    volumes = raw_data["Volume"]
-  else:
-    prices = raw_data[["Close"]] if "Close" in raw_data else pd.DataFrame()
-    volumes = raw_data[["Volume"]] if "Volume" in raw_data else pd.DataFrame()
-  return prices, volumes
+
+  prices = pd.DataFrame()
+  volumes = pd.DataFrame()
+
+  for t in tickers:
+    try:
+      if len(tickers) == 1:
+        prices[t] = raw_data["Close"]
+        volumes[t] = raw_data["Volume"]
+      else:
+        if t in raw_data.columns.levels[0]:
+          prices[t] = raw_data[t]["Close"]
+          volumes[t] = raw_data[t]["Volume"]
+    except Exception:
+      continue
+
+  return prices.dropna(how="all"), volumes.dropna(how="all")
 
 
 with st.spinner(
-    "Fetching live market data and computing liquidity & factor scores..."
+    f"Fetching live market data for {len(selected_tickers)} constituents and"
+    " computing liquidity & factor scores..."
 ):
   df_prices, df_volumes = fetch_market_data(selected_tickers)
 
@@ -106,10 +165,6 @@ if df_prices.empty:
       "Please select at least one index in the sidebar to populate the universe."
   )
   st.stop()
-
-if isinstance(df_prices, pd.Series):
-  df_prices = df_prices.to_frame()
-  df_volumes = df_volumes.to_frame()
 
 # --- LIQUIDITY FILTER APPLICATION ($500M+ Daily Dollar Volume) ---
 min_dollar_vol = min_liquidity_m * 1e6
@@ -122,7 +177,6 @@ for ticker in df_prices.columns:
     v_series = df_volumes[ticker].dropna()
     common_idx = p_series.index.intersection(v_series.index)
     if len(common_idx) > 63:
-      # Calculate 63-day average daily dollar volume (Price * Volume)
       dollar_vol_series = p_series.loc[common_idx] * v_series.loc[common_idx]
       avg_daily_vol = dollar_vol_series.iloc[-63:].mean()
       ticker_liquidity[ticker] = avg_daily_vol
@@ -137,7 +191,6 @@ if not liquid_tickers:
   )
   st.stop()
 
-# Filter price dataframe to only include liquid tickers
 df_prices_liquid = df_prices[liquid_tickers]
 
 # --- QUANTITATIVE CALCULATIONS ---
@@ -170,13 +223,13 @@ ranked_universe = sorted(scores, key=lambda k: scores[k], reverse=True)
 # --- QUARTERLY FILTER UPDATE LOGIC ---
 if run_quarterly_btn or not st.session_state.qmj_filtered_pool:
   if use_qmj:
-    cutoff = max(5, int(len(ranked_universe) * 0.5))
+    cutoff = max(10, int(len(ranked_universe) * 0.5))
     st.session_state.qmj_filtered_pool = ranked_universe[:cutoff]
   else:
     st.session_state.qmj_filtered_pool = ranked_universe
   st.session_state.last_action = (
-      f"Quarterly Filter Updated: QMJ screen applied to ${min_liquidity_m}M+"
-      " liquidity pool."
+      f"Quarterly Filter Updated: QMJ screen applied to liquid pool of"
+      f" {len(ranked_universe)} stocks."
   )
 
 active_pool = [
