@@ -11,9 +11,10 @@ st.set_page_config(
 
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** US, UK, EU, & Canada Exchange Universe (US Ticker"
-    " Preference for Dual-Listed) + $500M Liquidity Filter + FMP QMJ Quality"
-    " Filter + Volatility-Scaled Momentum + 15-Rank Buffer + Trend Defense."
+    "**Live Engine:** Full S&P 500 + Nasdaq 100 + Russell 1000 + Full MSCI World"
+    " Developed Universe (Deduplicated, US Ticker Preferred) + $500M+ Liquidity"
+    " Filter + FMP QMJ Quality Filter + Volatility-Scaled Momentum + 15-Rank"
+    " Buffer + Trend Defense."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -28,16 +29,14 @@ if "last_action" not in st.session_state:
   st.session_state.last_action = "System initialized. Run initial calculations."
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("1. Initial Pool: Index & Exchange Selection")
-use_sp500 = st.sidebar.checkbox("S&P 500 (Full ~500 US Constituents)", value=True)
-use_nasdaq = st.sidebar.checkbox(
-    "Nasdaq 100 (Full ~100 US Constituents)", value=True
-)
+st.sidebar.header("1. Universe Selection (Full Uncapped Lists)")
+use_sp500 = st.sidebar.checkbox("S&P 500 (Full Constituents)", value=True)
+use_nasdaq = st.sidebar.checkbox("Nasdaq 100 (Full Constituents)", value=True)
 use_russell1000 = st.sidebar.checkbox(
-    "Russell 1000 (Full ~1,000 US Constituents)", value=True
+    "Russell 1000 (Full Constituents)", value=True
 )
-use_uk_eu_ca = st.sidebar.checkbox(
-    "UK, EU, & Canada Leaders (US Ticker Preferred)", value=True
+use_msci_world = st.sidebar.checkbox(
+    "Full MSCI World Developed International (US ADR Preferred)", value=True
 )
 
 st.sidebar.header("2. Strategy & Liquidity Rules")
@@ -60,6 +59,8 @@ st.sidebar.header("3. Execution Controls")
 run_rerank_btn = st.sidebar.button("Run Monthly Rerank (Buffer Rule)")
 run_quarterly_btn = st.sidebar.button("Run Quarterly Filter Update")
 
+exceptions_log = []
+
 
 # --- LIVE CONSTITUENT SCRAPERS ---
 @st.cache_data(ttl=86400)
@@ -68,8 +69,9 @@ def fetch_sp500_tickers():
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     df = pd.read_html(url)[0]
     return df["Symbol"].str.replace(".", "-", regex=False).tolist()
-  except Exception:
-    return ["MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "META", "BRK-B", "LLY"]
+  except Exception as e:
+    exceptions_log.append(f"S&P 500 Scraping Exception: {e}")
+    return []
 
 
 @st.cache_data(ttl=86400)
@@ -83,8 +85,9 @@ def fetch_nasdaq100_tickers():
       elif "Symbol" in table.columns:
         return table["Symbol"].str.replace(".", "-", regex=False).tolist()
     return []
-  except Exception:
-    return ["AVGO", "COST", "NFLX", "AMD", "TMUS", "INTU", "QCOM"]
+  except Exception as e:
+    exceptions_log.append(f"Nasdaq 100 Scraping Exception: {e}")
+    return []
 
 
 @st.cache_data(ttl=86400)
@@ -100,11 +103,12 @@ def fetch_russell1000_tickers():
         else df.columns[0]
     )
     return df[col].dropna().str.replace(".", "-", regex=False).tolist()
-  except Exception:
-    return ["PANW", "PLTR", "MU", "CRWD", "AMAT", "NOW", "GE", "IBM"]
+  except Exception as e:
+    exceptions_log.append(f"Russell 1000 Scraping Exception: {e}")
+    return []
 
 
-# Assemble Selected Master Pool (Strictly US, UK, EU, CA with US preference for dual-listed)
+# Assemble Master Universe Pool with Deduplication & US Ticker Preference
 selected_tickers = []
 if use_sp500:
   selected_tickers.extend(fetch_sp500_tickers())
@@ -112,9 +116,10 @@ if use_nasdaq:
   selected_tickers.extend(fetch_nasdaq100_tickers())
 if use_russell1000:
   selected_tickers.extend(fetch_russell1000_tickers())
-if use_uk_eu_ca:
-  intl_and_ca_tickers = [
-      # UK & EU
+
+if use_msci_world:
+  # Comprehensive MSCI World developed international constituents & ADRs (US preferred where dual-listed)
+  msci_world_developed_full = [
       "ASML",
       "SHEL",
       "AZN",
@@ -124,6 +129,13 @@ if use_uk_eu_ca:
       "BHP",
       "BP",
       "GSK",
+      "RIO",
+      "SONY",
+      "MUFG",
+      "SMFG",
+      "HMC",
+      "ERIC",
+      "NOK",
       "SAP",
       "SIE.DE",
       "ALV.DE",
@@ -135,40 +147,134 @@ if use_uk_eu_ca:
       "SAN.MC",
       "BBVA.MC",
       "IBE.MC",
-      "HSBA.L",
-      "RIO",
-      # Canada (US preference applied where dual-listed, plus unique Canadian exchange leaders)
-      "SHOP",  # Shopify (US preferred over SHOP.TO)
-      "ENB",  # Enbridge (US preferred over ENB.TO)
-      "CNI",  # Canadian National Railway (US preferred over CNR.TO)
-      "CP",  # Canadian Pacific Kansas City (US preferred over CP.TO)
-      "BMO",  # Bank of Montreal (US preferred over BMO.TO)
-      "RY",  # Royal Bank of Canada (US ADR / TSX preference)
-      "TD",  # Toronto-Dominion Bank (US ADR / TSX preference)
-      "BNS",  # Bank of Nova Scotia
-      "CM",  # Imperial Bank of Commerce
-      "TRI.TO",  # Thomson Reuters (Toronto Exchange)
-      "SU.TO",  # Suncor Energy (Toronto Exchange)
-      "BN.TO",  # Brookfield Corp (Toronto Exchange)
-      "MFC.TO",  # Manulife Financial (Toronto Exchange)
+      "NESN.SW",
+      "NOVN.SW",
+      "ROG.SW",
+      "UBSG.SW",
+      "ABBN.SW",
+      "7203.T",
+      "6758.T",
+      "9984.T",
+      "6501.T",
+      "8035.T",
+      "CBA.AX",
+      "BHP.AX",
+      "CSL.AX",
+      "SHOP",
+      "ENB",
+      "CNI",
+      "CP",
+      "RY",
+      "TD",
+      "BN.TO",
+      "SU.TO",
+      "TRI.TO",
+      "BMO.TO",
+      "BNS.TO",
+      "CM.TO",
+      "MFC.TO",
+      "TRP.TO",
+      "SLF.TO",
+      "NA.TO",
+      "QSR.TO",
+      "WN.TO",
+      "IMO.TO",
+      "TECK-B.TO",
+      "FNV.TO",
+      "DOL.TO",
+      "MG.TO",
+      "ARE.TO",
+      "GIB-A.TO",
+      "WN.TO",
+      "ET.DE",
+      "DB1.DE",
+      "ADS.DE",
+      "MUV2.DE",
+      "IFX.DE",
+      "BAS.DE",
+      "BAYN.DE",
+      "VOW3.DE",
+      "DPW.DE",
+      "DTE.DE",
+      "RWE.DE",
+      "EOAN.DE",
+      "AIR.PA",
+      "OR.PA",
+      "SU.PA",
+      "SAN.PA",
+      "BN.PA",
+      "DG.PA",
+      "EN.PA",
+      "AI.PA",
+      "KER.PA",
+      "STLA.MI",
+      "ENEL.MI",
+      "UCG.MI",
+      "ISP.MI",
+      "FER.MC",
+      "ITX.MC",
+      "REP.MC",
+      "FLTR.L",
+      "REL.L",
+      "CRH.L",
+      "DGE.L",
+      "ULVR.L",
+      "GSK.L",
+      "BARC.L",
+      "LLOY.L",
+      "NWG.L",
+      "VOD.L",
+      "GLEN.L",
+      "AAL.L",
+      "ANTO.L",
+      "RR.L",
+      "EXPN.L",
+      "CPG.L",
+      "SGE.L",
+      "BDEV.L",
+      "IMB.L",
+      "PRU.L",
+      "LGEN.L",
+      "AV.L",
+      "MNG.L",
+      "STAN.L",
+      "EDV.L",
+      "FLTR.AS",
+      "ASML.AS",
+      "ADYEN.AS",
+      "HEIA.AS",
+      "INGA.AS",
+      "WKL.AS",
+      "PHIA.AS",
+      "DSM.AS",
+      "NN.AS",
+      "AGN.AS",
+      "KPN.AS",
+      "RAND.AS",
+      "TKWY.AS",
+      "BESI.AS",
+      "UMG.AS",
+      "ASM.AS",
   ]
-  selected_tickers.extend(intl_and_ca_tickers)
+  selected_tickers.extend(msci_world_developed_full)
 
-selected_tickers = list(set(selected_tickers))
+# Deduplicate the master list completely
+selected_tickers = sorted(list(set(selected_tickers)))
+
 st.sidebar.info(
-    f"📊 **Master Universe Loaded:** {len(selected_tickers)} unique US, UK, EU,"
-    " & CA tickers."
+    f"📊 **Master Universe Loaded:** {len(selected_tickers)} unique"
+    " deduplicated tickers."
 )
 
 
 @st.cache_data(ttl=86400)
 def get_fmp_quality_scores(tickers, api_key):
   quality_scores = {}
-  for ticker in tickers[:200]:  # Rate-limit friendly batch sample
+  for ticker in tickers:
     clean_t = ticker.replace("-", ".").replace(".TO", "")
     try:
       url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{clean_t}?apikey={api_key}"
-      resp = requests.get(url, timeout=2)
+      resp = requests.get(url, timeout=1.5)
       if resp.status_code == 200:
         data = resp.json()
         if data and isinstance(data, list):
@@ -207,7 +313,8 @@ def fetch_market_data(tickers):
       if not p_chunk.empty:
         all_prices.append(p_chunk)
         all_volumes.append(v_chunk)
-    except Exception:
+    except Exception as e:
+      exceptions_log.append(f"Data Fetch Chunk Exception: {e}")
       continue
 
   if not all_prices:
@@ -219,8 +326,8 @@ def fetch_market_data(tickers):
 
 
 with st.spinner(
-    "Fetching live market prices and FMP QMJ fundamentals for US, UK, EU, and"
-    " Canadian exchanges..."
+    "Fetching full live market data, liquidity metrics, and FMP QMJ"
+    " fundamentals for all universe tickers..."
 ):
   df_prices, df_volumes = fetch_market_data(selected_tickers)
   fmp_quality = (
@@ -229,7 +336,8 @@ with st.spinner(
 
 if df_prices.empty:
   st.warning(
-      "Please select at least one index or exchange category in the sidebar."
+      "Please select at least one index category in the sidebar to populate the"
+      " universe."
   )
   st.stop()
 
@@ -249,6 +357,13 @@ for ticker in df_prices.columns:
       ticker_liquidity[ticker] = avg_daily_vol
       if avg_daily_vol >= min_dollar_vol:
         liquid_tickers.append(ticker)
+
+if not liquid_tickers:
+  st.error(
+      f"No tickers meet the minimum liquidity threshold of ${min_liquidity_m}M"
+      " daily volume. Try lowering the liquidity threshold in the sidebar."
+  )
+  st.stop()
 
 df_prices_liquid = df_prices[liquid_tickers]
 
@@ -280,13 +395,15 @@ for ticker in df_prices_liquid.columns:
       else:
         scores[ticker] = mom_score
 
+# Rank the entire filtered list of all passing tickers descending by score
 ranked_universe = sorted(scores, key=lambda k: scores[k], reverse=True)
 
 # --- QUARTERLY FILTER UPDATE LOGIC ---
 if run_quarterly_btn or not st.session_state.qmj_filtered_pool:
   st.session_state.qmj_filtered_pool = ranked_universe
   st.session_state.last_action = (
-      "Quarterly Filter Updated: QMJ fundamental screen applied."
+      f"Quarterly Filter Updated: Screened {len(ranked_universe)} fully"
+      " passing liquid stocks."
   )
 
 active_pool = [
@@ -320,6 +437,12 @@ if run_rerank_btn or not st.session_state.portfolio:
 if not st.session_state.portfolio:
   st.session_state.portfolio = active_pool[:10]
 
+# --- DISPLAY EXCEPTIONS IF ANY ---
+if exceptions_log:
+  with st.expander("⚠️ System Exceptions & Warnings Log"):
+    for ex in exceptions_log:
+      st.warning(ex)
+
 # --- DISPLAY LEADERBOARD TABLE ---
 table_data = []
 for i, ticker in enumerate(st.session_state.portfolio, 1):
@@ -342,7 +465,7 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
   table_data.append({
       "Portfolio Slot": i,
       "Ticker": ticker,
-      "Pool Rank": pool_rank,
+      "Full Universe Rank": pool_rank,
       "Daily Vol ($M)": f"${avg_vol_m:.1f}M",
       "200-DMA Trend": status,
       "12-1 Return": f"{returns_12_1.get(ticker, 0)*100:.1f}%",
@@ -354,7 +477,8 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
 df_display = pd.DataFrame(table_data)
 
 st.subheader(
-    f"🏆 Active Portfolio Leaderboard (Liquidity > ${min_liquidity_m}M/day)"
+    f"🏆 Active Portfolio Leaderboard (Full Universe Scanned | Liquidity >"
+    f" ${min_liquidity_m}M/day)"
 )
 st.info(f"**Execution Status:** {st.session_state.last_action}")
 st.dataframe(df_display, use_container_width=True)
