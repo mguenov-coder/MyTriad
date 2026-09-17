@@ -349,6 +349,17 @@ with st.spinner(
       selected_tickers, FMP_KEY
   )
 
+# --- DISPLAY LOGGED EXCEPTIONS / WARNINGS AS TEXT INFO ---
+if exceptions_log:
+  st.warning(
+      f"⚠️ **System Notice:** {len(exceptions_log)} exception(s) or warning(s)"
+      " were logged during processing:"
+  )
+  for idx, ex in enumerate(exceptions_log, 1):
+    st.text(f"{idx}. {ex}")
+else:
+  st.success("✅ All data fetches and filters executed without exception.")
+
 if df_prices.empty:
   st.warning(
       "Please select at least one index category in the sidebar to populate the"
@@ -456,12 +467,6 @@ if run_rerank_btn or not st.session_state.portfolio:
 
 if not st.session_state.portfolio:
   st.session_state.portfolio = active_pool[:10]
-
-# --- DISPLAY EXCEPTIONS IF ANY ---
-if exceptions_log:
-  with st.expander("⚠️ System Exceptions & Warnings Log"):
-    for ex in exceptions_log:
-      st.warning(ex)
 
 # --- DISPLAY ACTIVE PORTFOLIO LEADERBOARD (TOP 10) ---
 table_data = []
