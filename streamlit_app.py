@@ -11,8 +11,8 @@ st.set_page_config(
 
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** S&P 500 + Nasdaq 100 + Russell 1000 + International"
-    " Developed Pools + $500M Liquidity Filter + FMP QMJ Quality Filter +"
+    "**Live Engine:** US, UK, & EU Exchange Universe (US Ticker Preference for"
+    " Dual-Listed) + $500M Liquidity Filter + FMP QMJ Quality Filter +"
     " Volatility-Scaled Momentum + 15-Rank Buffer + Trend Defense."
 )
 
@@ -28,14 +28,16 @@ if "last_action" not in st.session_state:
   st.session_state.last_action = "System initialized. Run initial calculations."
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("1. Initial Pool: Index Selection")
-use_sp500 = st.sidebar.checkbox("S&P 500 (Full ~500 Constituents)", value=True)
-use_nasdaq = st.sidebar.checkbox("Nasdaq 100 (Full ~100 Constituents)", value=True)
-use_russell1000 = st.sidebar.checkbox(
-    "Russell 1000 (Full ~1,000 Constituents)", value=True
+st.sidebar.header("1. Initial Pool: Index & Exchange Selection")
+use_sp500 = st.sidebar.checkbox("S&P 500 (Full ~500 US Constituents)", value=True)
+use_nasdaq = st.sidebar.checkbox(
+    "Nasdaq 100 (Full ~100 US Constituents)", value=True
 )
-use_intl = st.sidebar.checkbox(
-    "Developed International / MSCI World Bluechips", value=True
+use_russell1000 = st.sidebar.checkbox(
+    "Russell 1000 (Full ~1,000 US Constituents)", value=True
+)
+use_uk_eu = st.sidebar.checkbox(
+    "UK & EU Exchange Leaders (US Ticker Preferred)", value=True
 )
 
 st.sidebar.header("2. Strategy & Liquidity Rules")
@@ -102,7 +104,7 @@ def fetch_russell1000_tickers():
     return ["PANW", "PLTR", "MU", "CRWD", "AMAT", "NOW", "GE", "IBM"]
 
 
-# Assemble Selected Master Pool
+# Assemble Selected Master Pool (Strictly US, UK, EU with US preference for dual-listed)
 selected_tickers = []
 if use_sp500:
   selected_tickers.extend(fetch_sp500_tickers())
@@ -110,33 +112,39 @@ if use_nasdaq:
   selected_tickers.extend(fetch_nasdaq100_tickers())
 if use_russell1000:
   selected_tickers.extend(fetch_russell1000_tickers())
-if use_intl:
-  intl_developed = [
-      "ASML.AS",
-      "SHEL.L",
-      "HSBA.L",
-      "AZN.L",
-      "SAP.DE",
-      "SIE.DE",
-      "ALV.DE",
-      "MC.PA",
-      "RMS.PA",
-      "TTE.PA",
-      "SAN.MC",
-      "NESN.SW",
-      "NOVN.SW",
-      "7203.T",
-      "8306.T",
-      "BHP.AX",
-      "NVO",
-      "RY.TO",
-      "TD.TO",
+if use_uk_eu:
+  # UK & EU bluechips. Dual-listed companies use their primary US ticker (ADR/Listing),
+  # while unique local UK (.L) and EU (.DE, .PA, .AS, .MC) listings are captured directly.
+  uk_eu_tickers = [
+      "ASML",  # US preferred over ASML.AS
+      "SHEL",  # US preferred over SHEL.L
+      "AZN",  # US preferred over AZN.L
+      "SNY",  # Sanofi US ADR
+      "NVO",  # Novo Nordisk US ADR
+      "TM",  # Toyota US ADR
+      "BHP",  # BHP Group US ADR
+      "BP",  # BP plc US ADR
+      "GSK",  # GSK plc US ADR
+      "SAP",  # SAP SE US Listing
+      "SIE.DE",  # Siemens AG (Frankfurt - EU)
+      "ALV.DE",  # Allianz SE (Frankfurt - EU)
+      "MBG.DE",  # Mercedes-Benz Group (Frankfurt - EU)
+      "BMW.DE",  # BMW (Frankfurt - EU)
+      "MC.PA",  # LVMH (Euronext Paris - EU)
+      "RMS.PA",  # Hermes (Euronext Paris - EU)
+      "TTE.PA",  # TotalEnergies (Euronext Paris - EU)
+      "SAN.MC",  # Banco Santander (Madrid - EU)
+      "BBVA.MC",  # BBVA (Madrid - EU)
+      "IBE.MC",  # Iberdrola (Madrid - EU)
+      "HSBA.L",  # HSBC Holdings (London - UK)
+      "RIO",  # Rio Tinto US ADR
   ]
-  selected_tickers.extend(intl_developed)
+  selected_tickers.extend(uk_eu_tickers)
 
 selected_tickers = list(set(selected_tickers))
 st.sidebar.info(
-    f"📊 **Master Universe Loaded:** {len(selected_tickers)} unique tickers."
+    f"📊 **Master Universe Loaded:** {len(selected_tickers)} unique US, UK, & EU"
+    " tickers."
 )
 
 
@@ -198,8 +206,8 @@ def fetch_market_data(tickers):
 
 
 with st.spinner(
-    "Fetching live market prices and FMP QMJ fundamentals for selected"
-    " indices..."
+    "Fetching live market prices and FMP QMJ fundamentals for US, UK, and EU"
+    " exchanges..."
 ):
   df_prices, df_volumes = fetch_market_data(selected_tickers)
   fmp_quality = (
@@ -208,7 +216,7 @@ with st.spinner(
 
 if df_prices.empty:
   st.warning(
-      "Please select at least one index in the sidebar to populate the universe."
+      "Please select at least one index or exchange category in the sidebar."
   )
   st.stop()
 
