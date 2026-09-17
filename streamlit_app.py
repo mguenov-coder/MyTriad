@@ -10,9 +10,9 @@ st.set_page_config(
 
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** Dynamic Index Scraping (S&P 500 / Nasdaq 100) + $500M"
-    " Liquidity Filter + QMJ Quality Filter + Volatility-Scaled Momentum +"
-    " 15-Rank Buffer + Trend Defense."
+    "**Live Engine:** Dynamic Wikipedia Scraping (Full S&P 500, Nasdaq 100, &"
+    " Russell 1000 Constituents) + $500M Liquidity Filter + QMJ Quality Filter +"
+    " Volatility-Scaled Momentum + 15-Rank Buffer + Trend Defense."
 )
 
 # --- SESSION STATE INITIALIZATION ---
@@ -25,12 +25,13 @@ if "last_action" not in st.session_state:
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("1. Initial Pool: Index Selection")
-use_sp500 = st.sidebar.checkbox("S&P 500 (Full 500 Constituents)", value=True)
-use_nasdaq = st.sidebar.checkbox(
-    "Nasdaq 100 (Full 100 Constituents)", value=True
+use_sp500 = st.sidebar.checkbox("S&P 500 (Full ~500 Constituents)", value=True)
+use_nasdaq = st.sidebar.checkbox("Nasdaq 100 (Full ~100 Constituents)", value=True)
+use_russell1000 = st.sidebar.checkbox(
+    "Russell 1000 (Full ~1,000 Constituents)", value=True
 )
-use_msci_global = st.sidebar.checkbox(
-    "Global Developed Proxies (ASML, TSM, SAP, etc.)", value=True
+use_international = st.sidebar.checkbox(
+    "Developed International Equities (Europe/Asia Bluechips)", value=True
 )
 
 st.sidebar.header("2. Strategy & Liquidity Rules")
@@ -52,27 +53,15 @@ run_rerank_btn = st.sidebar.button("Run Monthly Rerank (Buffer Rule)")
 run_quarterly_btn = st.sidebar.button("Run Quarterly Filter Update")
 
 
-# --- DYNAMIC CONSTITUENT FETCHERS (WIKIPEDIA SCRAPING) ---
-@st.cache_data(ttl=86400)  # Cache for 24 hours to avoid redundant web scraping
+# --- LIVE CONSTITUENT SCRAPERS ---
+@st.cache_data(ttl=86400)
 def fetch_sp500_tickers():
   try:
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     df = pd.read_html(url)[0]
-    tickers = df["Symbol"].str.replace(".", "-", regex=False).tolist()
-    return tickers
+    return df["Symbol"].str.replace(".", "-", regex=False).tolist()
   except Exception:
-    return [
-        "MSFT",
-        "AAPL",
-        "NVDA",
-        "AMZN",
-        "GOOGL",
-        "META",
-        "BRK-B",
-        "LLY",
-        "JPM",
-        "XOM",
-    ]
+    return ["MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "META", "BRK-B", "LLY"]
 
 
 @st.cache_data(ttl=86400)
@@ -80,49 +69,81 @@ def fetch_nasdaq100_tickers():
   try:
     url = "https://en.wikipedia.org/wiki/Nasdaq-100"
     tables = pd.read_html(url)
-    # Find the table containing the ticker symbols
     for table in tables:
       if "Ticker" in table.columns:
         return table["Ticker"].str.replace(".", "-", regex=False).tolist()
       elif "Symbol" in table.columns:
         return table["Symbol"].str.replace(".", "-", regex=False).tolist()
-    return table[0].tolist()
+    return []
   except Exception:
-    return ["AVGO", "COST", "NFLX", "AMD", "TMUS", "INTU", "QCOM", "AMAT"]
+    return ["AVGO", "COST", "NFLX", "AMD", "TMUS", "INTU", "QCOM"]
 
 
-# Assemble Selected Universe Pool
+@st.cache_data(ttl=86400)
+def fetch_russell1000_tickers():
+  try:
+    url = "https://en.wikipedia.org/wiki/List_of_Russell_1000_companies"
+    df = pd.read_html(url)[0]
+    # Find the column containing ticker symbols
+    col = (
+        "Symbol"
+        if "Symbol" in df.columns
+        else df.columns[1]
+        if len(df.columns) > 1
+        else df.columns[0]
+    )
+    return df[col].dropna().str.replace(".", "-", regex=False).tolist()
+  except Exception:
+    return ["MSFT", "AAPL", "AMZN", "NVDA", "GOOGL", "BRK-B", "JPM", "XOM"]
+
+
+# Assemble Selected Master Pool
 selected_tickers = []
 if use_sp500:
   selected_tickers.extend(fetch_sp500_tickers())
 if use_nasdaq:
   selected_tickers.extend(fetch_nasdaq100_tickers())
-if use_msci_global:
-  global_proxies = [
+if use_russell1000:
+  selected_tickers.extend(fetch_russell1000_tickers())
+if use_international:
+  # Comprehensive basket of top global developed large-caps (Europe, Japan, UK, Australia)
+  intl_stocks = [
       "ASML",
-      "SAP",
       "TSM",
-      "TM",
+      "SAP",
       "SHEL",
+      "TM",
       "AZN",
       "NSRGY",
+      "NVO",
+      "BHP",
       "SNY",
       "SONY",
-      "BHP",
-      "NVO",
       "MC.PA",
       "RMS.PA",
       "TTE.PA",
       "SIE.DE",
       "ALV.DE",
+      "MBG.DE",
+      "BMW.DE",
+      "SAN.PA",
+      "AIR.PA",
+      "OR.PA",
+      "RIO",
+      "BP",
+      "GSK",
+      "REL.AS",
+      "ADYEN.AS",
+      "HEIA.AS",
+      "INGA.AS",
   ]
-  selected_tickers.extend(global_proxies)
+  selected_tickers.extend(intl_stocks)
 
 selected_tickers = list(set(selected_tickers))
 
 st.sidebar.info(
-    f"📊 **Master Universe Pool Loaded:** {len(selected_tickers)} raw tickers"
-    " from selected indices."
+    f"📊 **Master Universe Pool Loaded:** {len(selected_tickers)} unique raw"
+    " tickers from live index tables."
 )
 
 
@@ -130,33 +151,47 @@ st.sidebar.info(
 def fetch_market_data(tickers):
   if not tickers:
     return pd.DataFrame(), pd.DataFrame()
-  # Batch download prices and volumes from Yahoo Finance
-  # Note: For large pools (600+ stocks), yfinance batch download handles it efficiently
-  raw_data = yf.download(
-      tickers, period="15mo", interval="1d", group_by="ticker", progress=False
-  )
 
-  prices = pd.DataFrame()
-  volumes = pd.DataFrame()
+  # Chunk downloads to prevent Yahoo Finance batch limitations on large universe lists (~1,500+ symbols)
+  chunk_size = 150
+  all_prices = []
+  all_volumes = []
 
-  for t in tickers:
+  for i in range(0, len(tickers), chunk_size):
+    chunk = tickers[i : i + chunk_size]
     try:
-      if len(tickers) == 1:
-        prices[t] = raw_data["Close"]
-        volumes[t] = raw_data["Volume"]
-      else:
-        if t in raw_data.columns.levels[0]:
-          prices[t] = raw_data[t]["Close"]
-          volumes[t] = raw_data[t]["Volume"]
+      raw_data = yf.download(
+          chunk, period="15mo", interval="1d", group_by="ticker", progress=False
+      )
+      p_chunk = pd.DataFrame()
+      v_chunk = pd.DataFrame()
+
+      for t in chunk:
+        if len(chunk) == 1:
+          p_chunk[t] = raw_data["Close"]
+          v_chunk[t] = raw_data["Volume"]
+        else:
+          if t in raw_data.columns.levels[0]:
+            p_chunk[t] = raw_data[t]["Close"]
+            v_chunk[t] = raw_data[t]["Volume"]
+
+      if not p_chunk.empty:
+        all_prices.append(p_chunk)
+        all_volumes.append(v_chunk)
     except Exception:
       continue
 
-  return prices.dropna(how="all"), volumes.dropna(how="all")
+  if not all_prices:
+    return pd.DataFrame(), pd.DataFrame()
+
+  final_prices = pd.concat(all_prices, axis=1).dropna(how="all")
+  final_volumes = pd.concat(all_volumes, axis=1).dropna(how="all")
+  return final_prices, final_volumes
 
 
 with st.spinner(
-    f"Fetching live market data for {len(selected_tickers)} constituents and"
-    " computing liquidity & factor scores..."
+    f"Fetching live market data for {len(selected_tickers)} index constituents"
+    " and computing liquidity & factor scores..."
 ):
   df_prices, df_volumes = fetch_market_data(selected_tickers)
 
