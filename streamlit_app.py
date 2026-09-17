@@ -276,7 +276,6 @@ def get_market_caps_and_quality(tickers, api_key):
   quality_scores = {}
   for ticker in tickers:
     clean_t = ticker.replace("-", ".").replace(".TO", "")
-    # 1. Get Market Cap & Quality via FMP
     try:
       url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{clean_t}?apikey={api_key}"
       resp = requests.get(url, timeout=1.5)
@@ -286,7 +285,6 @@ def get_market_caps_and_quality(tickers, api_key):
           metrics = data[0]
           market_cap = metrics.get("marketCapTTM", 0) or 0
           if market_cap == 0:
-            # Fallback profile check for market cap
             prof_url = f"https://financialmodelingprep.com/api/v3/profile/{clean_t}?apikey={api_key}"
             prof_resp = requests.get(prof_url, timeout=1)
             if prof_resp.status_code == 200:
@@ -299,9 +297,7 @@ def get_market_caps_and_quality(tickers, api_key):
           gpm = metrics.get("grossProfitMarginTTM", 0) or 0
           quality_scores[ticker] = (roe * 0.6) + (gpm * 0.4)
     except Exception as e:
-      exceptions_log.append(
-          f"FMP Exception for {ticker}: {e}"
-      )
+      exceptions_log.append(f"FMP Exception for {ticker}: {e}")
       continue
   return market_caps, quality_scores
 
@@ -367,12 +363,10 @@ qualified_tickers = []
 ticker_liquidity = {}
 
 for ticker in df_prices.columns:
-  # Check Market Capitalization Filter (> $10B default)
   mcap = fmp_market_caps.get(ticker, 0)
   if mcap > 0 and mcap < min_mcap_val:
-    continue  # Filter out if below market cap threshold
+    continue
 
-  # Check Liquidity Filter (> $500M ADDV)
   if ticker in df_volumes.columns:
     p_series = df_prices[ticker].dropna()
     v_series = df_volumes[ticker].dropna()
@@ -469,7 +463,7 @@ if exceptions_log:
     for ex in exceptions_log:
       st.warning(ex)
 
-# --- DISPLAY LEADERBOARD TABLE ---
+# --- DISPLAY ACTIVE PORTFOLIO LEADERBOARD (TOP 10) ---
 table_data = []
 for i, ticker in enumerate(st.session_state.portfolio, 1):
   status = dma_status.get(ticker, "Above 200-DMA")
@@ -510,6 +504,37 @@ st.subheader(
 )
 st.info(f"**Execution Status:** {st.session_state.last_action}")
 st.dataframe(df_display, use_container_width=True)
+
+# --- DISPLAY FULL FILTERED & RANKED UNIVERSE TABLE (SORTABLE) ---
+st.markdown("---")
+st.subheader(
+    f"📊 Full Filtered & Ranked Universe ({len(active_pool)} Total Passing"
+    " Stocks)"
+)
+st.markdown(
+    "*Click any column header below to sort and rank the entire universe"
+    " interactively.*"
+)
+
+full_universe_data = []
+for rank, ticker in enumerate(active_pool, 1):
+  status = dma_status.get(ticker, "N/A")
+  avg_vol_m = ticker_liquidity.get(ticker, 0) / 1e6
+  mcap_b = fmp_market_caps.get(ticker, 0) / 1e9
+
+  full_universe_data.append({
+      "Rank": rank,
+      "Ticker": ticker,
+      "Market Cap ($B)": round(mcap_b, 1),
+      "Daily Vol ($M)": round(avg_vol_m, 1),
+      "200-DMA Trend": status,
+      "12-1 Return (%)": round(returns_12_1.get(ticker, 0) * 100, 1),
+      "Ann. Volatility (%)": round(vols.get(ticker, 0) * 100, 1),
+      "Risk-Adj Score": round(scores.get(ticker, 0), 2),
+  })
+
+df_full_universe = pd.DataFrame(full_universe_data)
+st.dataframe(df_full_universe, use_container_width=True, height=450)
 
 # --- QUICK CALCULATOR MODULE ---
 st.markdown("---")
