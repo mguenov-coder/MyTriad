@@ -6,13 +6,13 @@ import yfinance as yf
 
 # Page Configuration
 st.set_page_config(
-    page_title="Global MSCI World Momentum Dashboard", layout="wide"
+    page_title="Global Triad Momentum Dashboard", layout="wide"
 )
 
-st.title("🌐 Global MSCI World Quantitative Momentum Dashboard")
+st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** MSCI World ETF (URTH) Universe (~1,250 Developed Market"
-    " Constituents) + $500M Liquidity Filter + FMP QMJ Quality Filter +"
+    "**Live Engine:** S&P 500 + Nasdaq 100 + Russell 1000 + International"
+    " Developed Pools + $500M Liquidity Filter + FMP QMJ Quality Filter +"
     " Volatility-Scaled Momentum + 15-Rank Buffer + Trend Defense."
 )
 
@@ -28,13 +28,14 @@ if "last_action" not in st.session_state:
   st.session_state.last_action = "System initialized. Run initial calculations."
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("1. Universe Selection")
-universe_choice = st.sidebar.selectbox(
-    "Target Benchmark Universe",
-    [
-        "MSCI World ETF (URTH - Full Developed Index)",
-        "MSCI World Core Bluechips (~150 Liquid Leaders)",
-    ],
+st.sidebar.header("1. Initial Pool: Index Selection")
+use_sp500 = st.sidebar.checkbox("S&P 500 (Full ~500 Constituents)", value=True)
+use_nasdaq = st.sidebar.checkbox("Nasdaq 100 (Full ~100 Constituents)", value=True)
+use_russell1000 = st.sidebar.checkbox(
+    "Russell 1000 (Full ~1,000 Constituents)", value=True
+)
+use_intl = st.sidebar.checkbox(
+    "Developed International / MSCI World Bluechips", value=True
 )
 
 st.sidebar.header("2. Strategy & Liquidity Rules")
@@ -58,170 +59,84 @@ run_rerank_btn = st.sidebar.button("Run Monthly Rerank (Buffer Rule)")
 run_quarterly_btn = st.sidebar.button("Run Quarterly Filter Update")
 
 
-# --- FETCH MSCI WORLD URTH CONSTITUENTS ---
+# --- LIVE CONSTITUENT SCRAPERS ---
 @st.cache_data(ttl=86400)
-def get_msci_world_universe(mode):
-  if mode == "MSCI World Core Bluechips (~150 Liquid Leaders)":
-    # Broad multi-region developed market representation across US, Europe, UK, Japan, Australia
-    return [
-        "AAPL",
-        "NVDA",
-        "MSFT",
-        "AMZN",
-        "GOOGL",
-        "GOOG",
-        "AVGO",
-        "META",
-        "MU",
-        "TSLA",
-        "JPM",
-        "LLY",
-        "AMD",
-        "BRK-B",
-        "XOM",
-        "JNJ",
-        "V",
-        "ASML.AS",
-        "WMT",
-        "MA",
-        "ABBV",
-        "CSCO",
-        "INTC",
-        "COST",
-        "CVX",
-        "BAC",
-        "PLTR",
-        "CAT",
-        "MRK",
-        "HSBA.L",
-        "UNH",
-        "KO",
-        "LRCX",
-        "PG",
-        "NFLX",
-        "AMAT",
-        "GE",
-        "ROP.SW",
-        "HD",
-        "PM",
-        "PANW",
-        "GS",
-        "RY.TO",
-        "WFC",
-        "SHEL.L",
-        "RTX",
-        "8306.T",
-        "NOVN.SW",
-        "AZN.L",
-        "ORCL",
-        "NESN.SW",
-        "MS",
-        "TXN",
-        "GEV",
-        "CRWD",
-        "IBM",
-        "C",
-        "TMO",
-        "KLAC",
-        "BHP.AX",
-        "SIE.DE",
-        "SAP.DE",
-        "LIN",
-        "VZ",
-        "SAN.MC",
-        "CRM",
-        "AMGN",
-        "TD.TO",
-        "ANET",
-        "ALV.DE",
-        "QCOM",
-        "DIS",
-        "MRVL",
-        "PEP",
-        "7203.T",
-        "T",
-        "CBA.AX",
-        "MCD",
-        "GILD",
-        "TTE.PA",
-        "ABT",
-        "SCHW",
-        "ADI",
-        "AXP",
-        "SU.PA",
-        "NEE",
-        "UNP",
-        "COP",
-        "DE",
-        "UBSG.SW",
-        "8316.T",
-        "SHOP.NE",
-        "BBVA.MC",
-        "RR.L",
-        "DELL",
-        "PFE",
-        "BA",
-        "BLK",
-        "ETN",
-        "6501.T",
-        "NOW",
-        "8035.T",
-        "6857.T",
-        "ABBN.SW",
-        "IBE.MC",
-    ]
-  else:
-    # Combines S&P 500, Nasdaq 100, and major international developed markets to mirror URTH's coverage
-    try:
-      url_sp = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-      sp_df = pd.read_html(url_sp)[0]
-      sp_tickers = sp_df["Symbol"].str.replace(".", "-", regex=False).tolist()
-    except Exception:
-      sp_tickers = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"]
-
-    intl_developed = [
-        "ASML.AS",
-        "SHEL.L",
-        "HSBA.L",
-        "AZN.L",
-        "BP",
-        "GSK",
-        "RIO",
-        "SAP.DE",
-        "SIE.DE",
-        "ALV.DE",
-        "MBG.DE",
-        "BMW.DE",
-        "MC.PA",
-        "RMS.PA",
-        "TTE.PA",
-        "SAN.MC",
-        "BBVA.MC",
-        "IBE.MC",
-        "NESN.SW",
-        "NOVN.SW",
-        "ROP.SW",
-        "UBSG.SW",
-        "ABBN.SW",
-        "7203.T",
-        "8306.T",
-        "8316.T",
-        "6501.T",
-        "8035.T",
-        "6857.T",
-        "BHP.AX",
-        "CBA.AX",
-        "NVO",
-        "RY.TO",
-        "TD.TO",
-        "SHOP.NE",
-    ]
-    return list(set(sp_tickers + intl_developed))
+def fetch_sp500_tickers():
+  try:
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    df = pd.read_html(url)[0]
+    return df["Symbol"].str.replace(".", "-", regex=False).tolist()
+  except Exception:
+    return ["MSFT", "AAPL", "NVDA", "AMZN", "GOOGL", "META", "BRK-B", "LLY"]
 
 
-selected_tickers = get_msci_world_universe(universe_choice)
+@st.cache_data(ttl=86400)
+def fetch_nasdaq100_tickers():
+  try:
+    url = "https://en.wikipedia.org/wiki/Nasdaq-100"
+    tables = pd.read_html(url)
+    for table in tables:
+      if "Ticker" in table.columns:
+        return table["Ticker"].str.replace(".", "-", regex=False).tolist()
+      elif "Symbol" in table.columns:
+        return table["Symbol"].str.replace(".", "-", regex=False).tolist()
+    return []
+  except Exception:
+    return ["AVGO", "COST", "NFLX", "AMD", "TMUS", "INTU", "QCOM"]
+
+
+@st.cache_data(ttl=86400)
+def fetch_russell1000_tickers():
+  try:
+    url = "https://en.wikipedia.org/wiki/List_of_Russell_1000_companies"
+    df = pd.read_html(url)[0]
+    col = (
+        "Symbol"
+        if "Symbol" in df.columns
+        else df.columns[1]
+        if len(df.columns) > 1
+        else df.columns[0]
+    )
+    return df[col].dropna().str.replace(".", "-", regex=False).tolist()
+  except Exception:
+    return ["PANW", "PLTR", "MU", "CRWD", "AMAT", "NOW", "GE", "IBM"]
+
+
+# Assemble Selected Master Pool
+selected_tickers = []
+if use_sp500:
+  selected_tickers.extend(fetch_sp500_tickers())
+if use_nasdaq:
+  selected_tickers.extend(fetch_nasdaq100_tickers())
+if use_russell1000:
+  selected_tickers.extend(fetch_russell1000_tickers())
+if use_intl:
+  intl_developed = [
+      "ASML.AS",
+      "SHEL.L",
+      "HSBA.L",
+      "AZN.L",
+      "SAP.DE",
+      "SIE.DE",
+      "ALV.DE",
+      "MC.PA",
+      "RMS.PA",
+      "TTE.PA",
+      "SAN.MC",
+      "NESN.SW",
+      "NOVN.SW",
+      "7203.T",
+      "8306.T",
+      "BHP.AX",
+      "NVO",
+      "RY.TO",
+      "TD.TO",
+  ]
+  selected_tickers.extend(intl_developed)
+
+selected_tickers = list(set(selected_tickers))
 st.sidebar.info(
-    f"📊 **MSCI World Pool Loaded:** {len(selected_tickers)} constituents."
+    f"📊 **Master Universe Loaded:** {len(selected_tickers)} unique tickers."
 )
 
 
@@ -283,8 +198,8 @@ def fetch_market_data(tickers):
 
 
 with st.spinner(
-    "Fetching live market prices and FMP QMJ fundamentals for MSCI World"
-    " constituents..."
+    "Fetching live market prices and FMP QMJ fundamentals for selected"
+    " indices..."
 ):
   df_prices, df_volumes = fetch_market_data(selected_tickers)
   fmp_quality = (
@@ -292,7 +207,9 @@ with st.spinner(
   )
 
 if df_prices.empty:
-  st.warning("Error fetching market data. Please verify selections.")
+  st.warning(
+      "Please select at least one index in the sidebar to populate the universe."
+  )
   st.stop()
 
 # --- LIQUIDITY FILTER ($500M+ Daily Dollar Volume) ---
@@ -348,7 +265,7 @@ ranked_universe = sorted(scores, key=lambda k: scores[k], reverse=True)
 if run_quarterly_btn or not st.session_state.qmj_filtered_pool:
   st.session_state.qmj_filtered_pool = ranked_universe
   st.session_state.last_action = (
-      "Quarterly Filter Updated: MSCI World QMJ screen applied."
+      "Quarterly Filter Updated: QMJ fundamental screen applied."
   )
 
 active_pool = [
@@ -416,7 +333,7 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
 df_display = pd.DataFrame(table_data)
 
 st.subheader(
-    f"🏆 MSCI World Active Leaderboard (Liquidity > ${min_liquidity_m}M/day)"
+    f"🏆 Active Portfolio Leaderboard (Liquidity > ${min_liquidity_m}M/day)"
 )
 st.info(f"**Execution Status:** {st.session_state.last_action}")
 st.dataframe(df_display, use_container_width=True)
