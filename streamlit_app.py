@@ -11,9 +11,9 @@ st.set_page_config(
 
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** US, UK, & EU Exchange Universe (US Ticker Preference for"
-    " Dual-Listed) + $500M Liquidity Filter + FMP QMJ Quality Filter +"
-    " Volatility-Scaled Momentum + 15-Rank Buffer + Trend Defense."
+    "**Live Engine:** US, UK, EU, & Canada Exchange Universe (US Ticker"
+    " Preference for Dual-Listed) + $500M Liquidity Filter + FMP QMJ Quality"
+    " Filter + Volatility-Scaled Momentum + 15-Rank Buffer + Trend Defense."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -36,8 +36,8 @@ use_nasdaq = st.sidebar.checkbox(
 use_russell1000 = st.sidebar.checkbox(
     "Russell 1000 (Full ~1,000 US Constituents)", value=True
 )
-use_uk_eu = st.sidebar.checkbox(
-    "UK & EU Exchange Leaders (US Ticker Preferred)", value=True
+use_uk_eu_ca = st.sidebar.checkbox(
+    "UK, EU, & Canada Leaders (US Ticker Preferred)", value=True
 )
 
 st.sidebar.header("2. Strategy & Liquidity Rules")
@@ -104,7 +104,7 @@ def fetch_russell1000_tickers():
     return ["PANW", "PLTR", "MU", "CRWD", "AMAT", "NOW", "GE", "IBM"]
 
 
-# Assemble Selected Master Pool (Strictly US, UK, EU with US preference for dual-listed)
+# Assemble Selected Master Pool (Strictly US, UK, EU, CA with US preference for dual-listed)
 selected_tickers = []
 if use_sp500:
   selected_tickers.extend(fetch_sp500_tickers())
@@ -112,39 +112,52 @@ if use_nasdaq:
   selected_tickers.extend(fetch_nasdaq100_tickers())
 if use_russell1000:
   selected_tickers.extend(fetch_russell1000_tickers())
-if use_uk_eu:
-  # UK & EU bluechips. Dual-listed companies use their primary US ticker (ADR/Listing),
-  # while unique local UK (.L) and EU (.DE, .PA, .AS, .MC) listings are captured directly.
-  uk_eu_tickers = [
-      "ASML",  # US preferred over ASML.AS
-      "SHEL",  # US preferred over SHEL.L
-      "AZN",  # US preferred over AZN.L
-      "SNY",  # Sanofi US ADR
-      "NVO",  # Novo Nordisk US ADR
-      "TM",  # Toyota US ADR
-      "BHP",  # BHP Group US ADR
-      "BP",  # BP plc US ADR
-      "GSK",  # GSK plc US ADR
-      "SAP",  # SAP SE US Listing
-      "SIE.DE",  # Siemens AG (Frankfurt - EU)
-      "ALV.DE",  # Allianz SE (Frankfurt - EU)
-      "MBG.DE",  # Mercedes-Benz Group (Frankfurt - EU)
-      "BMW.DE",  # BMW (Frankfurt - EU)
-      "MC.PA",  # LVMH (Euronext Paris - EU)
-      "RMS.PA",  # Hermes (Euronext Paris - EU)
-      "TTE.PA",  # TotalEnergies (Euronext Paris - EU)
-      "SAN.MC",  # Banco Santander (Madrid - EU)
-      "BBVA.MC",  # BBVA (Madrid - EU)
-      "IBE.MC",  # Iberdrola (Madrid - EU)
-      "HSBA.L",  # HSBC Holdings (London - UK)
-      "RIO",  # Rio Tinto US ADR
+if use_uk_eu_ca:
+  intl_and_ca_tickers = [
+      # UK & EU
+      "ASML",
+      "SHEL",
+      "AZN",
+      "SNY",
+      "NVO",
+      "TM",
+      "BHP",
+      "BP",
+      "GSK",
+      "SAP",
+      "SIE.DE",
+      "ALV.DE",
+      "MBG.DE",
+      "BMW.DE",
+      "MC.PA",
+      "RMS.PA",
+      "TTE.PA",
+      "SAN.MC",
+      "BBVA.MC",
+      "IBE.MC",
+      "HSBA.L",
+      "RIO",
+      # Canada (US preference applied where dual-listed, plus unique Canadian exchange leaders)
+      "SHOP",  # Shopify (US preferred over SHOP.TO)
+      "ENB",  # Enbridge (US preferred over ENB.TO)
+      "CNI",  # Canadian National Railway (US preferred over CNR.TO)
+      "CP",  # Canadian Pacific Kansas City (US preferred over CP.TO)
+      "BMO",  # Bank of Montreal (US preferred over BMO.TO)
+      "RY",  # Royal Bank of Canada (US ADR / TSX preference)
+      "TD",  # Toronto-Dominion Bank (US ADR / TSX preference)
+      "BNS",  # Bank of Nova Scotia
+      "CM",  # Imperial Bank of Commerce
+      "TRI.TO",  # Thomson Reuters (Toronto Exchange)
+      "SU.TO",  # Suncor Energy (Toronto Exchange)
+      "BN.TO",  # Brookfield Corp (Toronto Exchange)
+      "MFC.TO",  # Manulife Financial (Toronto Exchange)
   ]
-  selected_tickers.extend(uk_eu_tickers)
+  selected_tickers.extend(intl_and_ca_tickers)
 
 selected_tickers = list(set(selected_tickers))
 st.sidebar.info(
-    f"📊 **Master Universe Loaded:** {len(selected_tickers)} unique US, UK, & EU"
-    " tickers."
+    f"📊 **Master Universe Loaded:** {len(selected_tickers)} unique US, UK, EU,"
+    " & CA tickers."
 )
 
 
@@ -152,7 +165,7 @@ st.sidebar.info(
 def get_fmp_quality_scores(tickers, api_key):
   quality_scores = {}
   for ticker in tickers[:200]:  # Rate-limit friendly batch sample
-    clean_t = ticker.replace("-", ".")
+    clean_t = ticker.replace("-", ".").replace(".TO", "")
     try:
       url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{clean_t}?apikey={api_key}"
       resp = requests.get(url, timeout=2)
@@ -206,8 +219,8 @@ def fetch_market_data(tickers):
 
 
 with st.spinner(
-    "Fetching live market prices and FMP QMJ fundamentals for US, UK, and EU"
-    " exchanges..."
+    "Fetching live market prices and FMP QMJ fundamentals for US, UK, EU, and"
+    " Canadian exchanges..."
 ):
   df_prices, df_volumes = fetch_market_data(selected_tickers)
   fmp_quality = (
