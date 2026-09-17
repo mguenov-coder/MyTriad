@@ -1,4 +1,3 @@
-
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -125,9 +124,7 @@ for ticker in df_prices.columns:
       scores[ticker] = ret_12_1 / vols[ticker]
 
 # Rank universe descending by volatility-scaled momentum score
-ranked_universe = sorted(
-    scores, key=lambda k: scores[k], reverse=True
-)
+ranked_universe = sorted(scores, key=lambda k: scores[k], reverse=True)
 
 # --- QUARTERLY FILTER UPDATE LOGIC ---
 if run_quarterly_btn or not st.session_state.qmj_filtered_pool:
@@ -189,7 +186,6 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
         else "10.0% MSCI World ETF (URTH)"
     )
 
-  # Get rank in active pool
   pool_rank = (
       active_pool.index(ticker) + 1 if ticker in active_pool else "N/A"
   )
@@ -207,10 +203,8 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
 
 df_display = pd.DataFrame(table_data)
 
-st.subheader(
-    f"🏆 Active Portfolio Leaderboard ({'QMJ Filtered' if use_qmj else 'Raw"
-    " Momentum'})"
-)
+filter_mode_label = "QMJ Filtered" if use_qmj else "Raw Momentum"
+st.subheader(f"🏆 Active Portfolio Leaderboard ({filter_mode_label})")
 st.info(f"**Execution Status:** {st.session_state.last_action}")
 st.dataframe(df_display, use_container_width=True)
 
