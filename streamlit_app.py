@@ -12,9 +12,9 @@ st.set_page_config(
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
     "**Live Engine:** Full S&P 500 + Nasdaq 100 + Russell 1000 + Full MSCI World"
-    " Developed Universe (Deduplicated, US Ticker Preferred) + **Market Cap >"
-    " $10B Filter** + $500M+ Liquidity Filter + FMP QMJ Quality Filter +"
-    " Volatility-Scaled Momentum + 15-Rank Buffer + Trend Defense."
+    " Developed Universe (Deduplicated, US Ticker Preferred) + $500M+ Liquidity"
+    " Filter + FMP QMJ Quality Filter + Volatility-Scaled Momentum + 15-Rank"
+    " Buffer + Trend Defense."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -41,14 +41,7 @@ use_msci_world = st.sidebar.checkbox(
     "Full MSCI World Developed International (US ADR Preferred)", value=True
 )
 
-st.sidebar.header("2. Strategy, Size & Liquidity Rules")
-min_market_cap_b = st.sidebar.slider(
-    "Min. Market Capitalization ($B)",
-    min_value=1.0,
-    max_value=50.0,
-    value=10.0,
-    step=1.0,
-)
+st.sidebar.header("2. Strategy & Liquidity Rules")
 min_liquidity_m = st.sidebar.slider(
     "Min. Average Daily Volume ($M)",
     min_value=100.0,
@@ -271,8 +264,7 @@ st.sidebar.info(
 
 
 @st.cache_data(ttl=86400)
-def get_market_caps_and_quality(tickers, api_key):
-  market_caps = {}
+def get_fmp_quality_scores(tickers, api_key):
   quality_scores = {}
   for ticker in tickers:
     clean_t = ticker.replace("-", ".").replace(".TO", "")
@@ -283,23 +275,13 @@ def get_market_caps_and_quality(tickers, api_key):
         data = resp.json()
         if data and isinstance(data, list):
           metrics = data[0]
-          market_cap = metrics.get("marketCapTTM", 0) or 0
-          if market_cap == 0:
-            prof_url = f"https://financialmodelingprep.com/api/v3/profile/{clean_t}?apikey={api_key}"
-            prof_resp = requests.get(prof_url, timeout=1)
-            if prof_resp.status_code == 200:
-              p_data = prof_resp.json()
-              if p_data and isinstance(p_data, list):
-                market_cap = p_data[0].get("mktCap", 0) or 0
-
-          market_caps[ticker] = market_cap
           roe = metrics.get("roeTTM", 0) or 0
           gpm = metrics.get("grossProfitMarginTTM", 0) or 0
           quality_scores[ticker] = (roe * 0.6) + (gpm * 0.4)
     except Exception as e:
       exceptions_log.append(f"FMP Exception for {ticker}: {e}")
       continue
-  return market_caps, quality_scores
+  return quality_scores
 
 
 @st.cache_data(ttl=3600)
@@ -341,13 +323,10 @@ def fetch_market_data(tickers):
 
 
 with st.spinner(
-    "Fetching market data, liquidity metrics, and evaluating Market Cap (> $"
-    f"{min_market_cap_b}B) & QMJ fundamentals..."
+    "Fetching market data, liquidity metrics, and FMP QMJ fundamentals..."
 ):
   df_prices, df_volumes = fetch_market_data(selected_tickers)
-  fmp_market_caps, fmp_quality = get_market_caps_and_quality(
-      selected_tickers, FMP_KEY
-  )
+  fmp_quality = get_fmp_quality_scores(selected_tickers, FMP_KEY)
 
 # --- DISPLAY LOGGED EXCEPTIONS / WARNINGS AS TEXT INFO ---
 if exceptions_log:
@@ -367,17 +346,12 @@ if df_prices.empty:
   )
   st.stop()
 
-# --- MARKET CAP & LIQUIDITY FILTER APPLICATION ---
-min_mcap_val = min_market_cap_b * 1e9
+# --- LIQUIDITY FILTER APPLICATION ---
 min_dollar_vol = min_liquidity_m * 1e6
 qualified_tickers = []
 ticker_liquidity = {}
 
 for ticker in df_prices.columns:
-  mcap = fmp_market_caps.get(ticker, 0)
-  if mcap > 0 and mcap < min_mcap_val:
-    continue
-
   if ticker in df_volumes.columns:
     p_series = df_prices[ticker].dropna()
     v_series = df_volumes[ticker].dropna()
@@ -391,8 +365,8 @@ for ticker in df_prices.columns:
 
 if not qualified_tickers:
   st.error(
-      f"No tickers meet both the Market Cap (> ${min_market_cap_b}B) and"
-      f" Liquidity (> ${min_liquidity_m}M/day) thresholds."
+      f"No tickers meet the minimum liquidity threshold of ${min_liquidity_m}M"
+      " daily volume."
   )
   st.stop()
 
@@ -434,7 +408,7 @@ if run_quarterly_btn or not st.session_state.qmj_filtered_pool:
   st.session_state.qmj_filtered_pool = ranked_universe
   st.session_state.last_action = (
       f"Quarterly Filter Updated: Screened {len(ranked_universe)} fully"
-      " passing large-cap liquid stocks."
+      " passing liquid stocks."
   )
 
 active_pool = [
@@ -486,13 +460,11 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
       active_pool.index(ticker) + 1 if ticker in active_pool else "N/A"
   )
   avg_vol_m = ticker_liquidity.get(ticker, 0) / 1e6
-  mcap_b = fmp_market_caps.get(ticker, 0) / 1e9
 
   table_data.append({
       "Portfolio Slot": i,
       "Ticker": ticker,
       "Full Universe Rank": pool_rank,
-      "Market Cap ($B)": f"${mcap_b:.1f}B",
       "Daily Vol ($M)": f"${avg_vol_m:.1f}M",
       "200-DMA Trend": status,
       "12-1 Return": f"{returns_12_1.get(ticker, 0)*100:.1f}%",
@@ -504,8 +476,7 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
 df_display = pd.DataFrame(table_data)
 
 st.subheader(
-    f"🏆 Active Portfolio Leaderboard (Market Cap > ${min_market_cap_b}B |"
-    f" Liquidity > ${min_liquidity_m}M/day)"
+    f"🏆 Active Portfolio Leaderboard (Liquidity > ${min_liquidity_m}M/day)"
 )
 st.info(f"**Execution Status:** {st.session_state.last_action}")
 st.dataframe(df_display, use_container_width=True)
@@ -525,12 +496,10 @@ full_universe_data = []
 for rank, ticker in enumerate(active_pool, 1):
   status = dma_status.get(ticker, "N/A")
   avg_vol_m = ticker_liquidity.get(ticker, 0) / 1e6
-  mcap_b = fmp_market_caps.get(ticker, 0) / 1e9
 
   full_universe_data.append({
       "Rank": rank,
       "Ticker": ticker,
-      "Market Cap ($B)": round(mcap_b, 1),
       "Daily Vol ($M)": round(avg_vol_m, 1),
       "200-DMA Trend": status,
       "12-1 Return (%)": round(returns_12_1.get(ticker, 0) * 100, 1),
