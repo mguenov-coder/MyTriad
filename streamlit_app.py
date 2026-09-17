@@ -10,8 +10,9 @@ st.set_page_config(
 
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** Dynamic Universe Pool + QMJ Quality Filter +"
-    " Volatility-Scaled Momentum + 15-Rank Buffer + Trend Defense."
+    "**Live Engine:** Dynamic Universe Pool + $500M Liquidity Filter + QMJ"
+    " Quality Filter + Volatility-Scaled Momentum + 15-Rank Buffer + Trend"
+    " Defense."
 )
 
 # --- SESSION STATE INITIALIZATION ---
@@ -29,7 +30,14 @@ use_sp500 = st.sidebar.checkbox("S&P 500 (US Large Cap)", value=True)
 use_nasdaq = st.sidebar.checkbox("Nasdaq 100 (US Tech Growth)", value=True)
 use_russell = st.sidebar.checkbox("Russell 1000 (US Broad Large/Mid)", value=True)
 
-st.sidebar.header("2. Strategy Rules")
+st.sidebar.header("2. Strategy & Liquidity Rules")
+min_liquidity_m = st.sidebar.slider(
+    "Min. Average Daily Volume ($M)",
+    min_value=100.0,
+    max_value=2000.0,
+    value=500.0,
+    step=50.0,
+)
 use_qmj = st.sidebar.checkbox("Enable QMJ Quality Pre-Filter", value=True)
 exit_vehicle = st.sidebar.selectbox(
     "Destination Vehicle on 200-DMA Exit",
@@ -75,19 +83,23 @@ selected_tickers = list(set(selected_tickers))
 @st.cache_data(ttl=3600)
 def fetch_market_data(tickers):
   if not tickers:
-    return pd.DataFrame()
+    return pd.DataFrame(), pd.DataFrame()
   raw_data = yf.download(
       tickers, period="15mo", interval="1d", progress=False
   )
   if isinstance(raw_data.columns, pd.MultiIndex):
     prices = raw_data["Close"]
+    volumes = raw_data["Volume"]
   else:
-    prices = raw_data[["Close"]] if "Close" in raw_data else raw_data
-  return prices
+    prices = raw_data[["Close"]] if "Close" in raw_data else pd.DataFrame()
+    volumes = raw_data[["Volume"]] if "Volume" in raw_data else pd.DataFrame()
+  return prices, volumes
 
 
-with st.spinner("Fetching live market data and computing factor scores..."):
-  df_prices = fetch_market_data(selected_tickers)
+with st.spinner(
+    "Fetching live market data and computing liquidity & factor scores..."
+):
+  df_prices, df_volumes = fetch_market_data(selected_tickers)
 
 if df_prices.empty:
   st.warning(
@@ -97,6 +109,36 @@ if df_prices.empty:
 
 if isinstance(df_prices, pd.Series):
   df_prices = df_prices.to_frame()
+  df_volumes = df_volumes.to_frame()
+
+# --- LIQUIDITY FILTER APPLICATION ($500M+ Daily Dollar Volume) ---
+min_dollar_vol = min_liquidity_m * 1e6
+liquid_tickers = []
+ticker_liquidity = {}
+
+for ticker in df_prices.columns:
+  if ticker in df_volumes.columns:
+    p_series = df_prices[ticker].dropna()
+    v_series = df_volumes[ticker].dropna()
+    common_idx = p_series.index.intersection(v_series.index)
+    if len(common_idx) > 63:
+      # Calculate 63-day average daily dollar volume (Price * Volume)
+      dollar_vol_series = p_series.loc[common_idx] * v_series.loc[common_idx]
+      avg_daily_vol = dollar_vol_series.iloc[-63:].mean()
+      ticker_liquidity[ticker] = avg_daily_vol
+
+      if avg_daily_vol >= min_dollar_vol:
+        liquid_tickers.append(ticker)
+
+if not liquid_tickers:
+  st.error(
+      f"No tickers meet the minimum liquidity threshold of ${min_liquidity_m}M"
+      " daily volume. Try lowering the liquidity threshold in the sidebar."
+  )
+  st.stop()
+
+# Filter price dataframe to only include liquid tickers
+df_prices_liquid = df_prices[liquid_tickers]
 
 # --- QUANTITATIVE CALCULATIONS ---
 scores = {}
@@ -104,8 +146,8 @@ dma_status = {}
 returns_12_1 = {}
 vols = {}
 
-for ticker in df_prices.columns:
-  series = df_prices[ticker].dropna()
+for ticker in df_prices_liquid.columns:
+  series = df_prices_liquid[ticker].dropna()
   if len(series) > 200:
     current_price = series.iloc[-1]
     dma_200 = series.rolling(window=200).mean().iloc[-1]
@@ -123,7 +165,6 @@ for ticker in df_prices.columns:
 
       scores[ticker] = ret_12_1 / vols[ticker]
 
-# Rank universe descending by volatility-scaled momentum score
 ranked_universe = sorted(scores, key=lambda k: scores[k], reverse=True)
 
 # --- QUARTERLY FILTER UPDATE LOGIC ---
@@ -134,11 +175,10 @@ if run_quarterly_btn or not st.session_state.qmj_filtered_pool:
   else:
     st.session_state.qmj_filtered_pool = ranked_universe
   st.session_state.last_action = (
-      "Quarterly Filter Updated: QMJ fundamental screen re-ran across selected"
-      " index pool."
+      f"Quarterly Filter Updated: QMJ screen applied to ${min_liquidity_m}M+"
+      " liquidity pool."
   )
 
-# Use current filtered pool for ranking
 active_pool = [
     t for t in st.session_state.qmj_filtered_pool if t in ranked_universe
 ]
@@ -149,14 +189,12 @@ if run_rerank_btn or not st.session_state.portfolio:
   current_portfolio = st.session_state.portfolio
   new_portfolio = []
 
-  # Step 1: Apply 15-rank buffer rule to existing holdings
   for ticker in current_portfolio:
     if ticker in active_pool:
       current_rank = active_pool.index(ticker) + 1
-      if current_rank <= 15:  # Retained within buffer threshold
+      if current_rank <= 15:
         new_portfolio.append(ticker)
 
-  # Step 2: Fill remaining slots up to 10 from the top of the ranked list
   for ticker in active_pool:
     if len(new_portfolio) >= 10:
       break
@@ -169,7 +207,6 @@ if run_rerank_btn or not st.session_state.portfolio:
       f" {len(new_portfolio)} assets."
   )
 
-# Ensure portfolio defaults to top 10 if empty
 if not st.session_state.portfolio:
   st.session_state.portfolio = active_pool[:10]
 
@@ -177,23 +214,26 @@ if not st.session_state.portfolio:
 table_data = []
 for i, ticker in enumerate(st.session_state.portfolio, 1):
   status = dma_status.get(ticker, "Above 200-DMA")
-  if status == "Above 200-DMA":
-    alloc = "10.0% Equities"
-  else:
-    alloc = (
-        "10.0% Cash"
-        if "Cash" in exit_vehicle
-        else "10.0% MSCI World ETF (URTH)"
-    )
+  alloc = (
+      "10.0% Equities"
+      if status == "Above 200-DMA"
+      else (
+          "10.0% Cash"
+          if "Cash" in exit_vehicle
+          else "10.0% MSCI World ETF (URTH)"
+      )
+  )
 
   pool_rank = (
       active_pool.index(ticker) + 1 if ticker in active_pool else "N/A"
   )
+  avg_vol_m = ticker_liquidity.get(ticker, 0) / 1e6
 
   table_data.append({
       "Portfolio Slot": i,
       "Ticker": ticker,
       "Pool Rank": pool_rank,
+      "Daily Vol ($M)": f"${avg_vol_m:.1f}M",
       "200-DMA Trend": status,
       "12-1 Return": f"{returns_12_1.get(ticker, 0)*100:.1f}%",
       "Ann. Volatility": f"{vols.get(ticker, 0)*100:.1f}%",
@@ -204,7 +244,10 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
 df_display = pd.DataFrame(table_data)
 
 filter_mode_label = "QMJ Filtered" if use_qmj else "Raw Momentum"
-st.subheader(f"🏆 Active Portfolio Leaderboard ({filter_mode_label})")
+st.subheader(
+    f"🏆 Active Portfolio Leaderboard ({filter_mode_label} | Liquidity >"
+    f" ${min_liquidity_m}M/day)"
+)
 st.info(f"**Execution Status:** {st.session_state.last_action}")
 st.dataframe(df_display, use_container_width=True)
 
