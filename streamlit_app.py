@@ -11,15 +11,15 @@ st.set_page_config(
 
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** Lazy-Loaded Universe + ETF Holdings Fallback + $500M+"
-    " Liquidity Filter + FMP QMJ Quality Filter + Volatility-Scaled Momentum +"
-    " 15-Rank Buffer (Isolated Rerank)."
+    "**Live Engine:** On-Demand Lazy-Loaded Universe + ETF Holdings Fallback +"
+    " $500M+ Liquidity Filter + FMP QMJ Quality Filter + Volatility-Scaled"
+    " Momentum + 15-Rank Buffer (Isolated Rerank)."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
 FMP_KEY = st.secrets.get("FMP_API_KEY", "demo")
 
-# --- SESSION STATE INITIALIZATION (Persistent Storage) ---
+# --- SESSION STATE INITIALIZATION (Empty Start on Refresh) ---
 if "portfolio" not in st.session_state:
   st.session_state.portfolio = []
 if "saved_filtered_pool" not in st.session_state:
@@ -40,8 +40,8 @@ if "saved_vols" not in st.session_state:
   st.session_state.saved_vols = {}
 if "last_action" not in st.session_state:
   st.session_state.last_action = (
-      "System initialized. Click 'Run Quarterly Filter Update' to load data"
-      " and run initial calculations."
+      "System initialized with empty list. Click 'Run Quarterly Filter Update'"
+      " to load data."
   )
 
 exceptions_log = []
@@ -316,8 +316,8 @@ def fetch_market_data(tickers):
   )
 
 
-# --- QUARTERLY UPDATE EXECUTION (LAZY LOAD TRIGGER) ---
-if run_quarterly_btn or not st.session_state.saved_filtered_pool:
+# --- QUARTERLY UPDATE EXECUTION (EXPLICIT TRIGGER ONLY) ---
+if run_quarterly_btn:
   with st.spinner(
       "Loading lists, fetching live market data, and computing QMJ"
       " fundamentals..."
@@ -473,11 +473,9 @@ if run_quarterly_btn or not st.session_state.saved_filtered_pool:
     df_prices, df_volumes = fetch_market_data(selected_tickers)
     fmp_quality = get_fmp_quality_scores(selected_tickers, FMP_KEY)
 
-    # Save raw market data to session state
     st.session_state.saved_prices = df_prices
     st.session_state.saved_volumes = df_volumes
 
-    # Apply Liquidity Filter
     min_dollar_vol = min_liquidity_m * 1e6
     qualified_tickers = []
     ticker_liquidity = {}
@@ -497,7 +495,6 @@ if run_quarterly_btn or not st.session_state.saved_filtered_pool:
     st.session_state.saved_liquidity = ticker_liquidity
     df_prices_qualified = df_prices[qualified_tickers]
 
-    # Quantitative Calculations
     scores, dma_status, returns_12_1, vols = {}, {}, {}, {}
     for ticker in df_prices_qualified.columns:
       series = df_prices_qualified[ticker].dropna()
@@ -523,7 +520,6 @@ if run_quarterly_btn or not st.session_state.saved_filtered_pool:
 
     ranked_universe = sorted(scores, key=lambda k: scores[k], reverse=True)
 
-    # Save calculated metrics to session state
     st.session_state.saved_filtered_pool = ranked_universe
     st.session_state.saved_scores = scores
     st.session_state.saved_dma = dma_status
@@ -534,7 +530,7 @@ if run_quarterly_btn or not st.session_state.saved_filtered_pool:
         " stocks."
     )
 
-# --- DISPLAY LOGGED EXCEPTIONS / NOTICES ---
+# --- DISPLAY LOGGED EXCEPTIONS ---
 if exceptions_log:
   st.warning(
       f"⚠️ **System Notice:** {len(exceptions_log)} fallback(s) occurred:"
@@ -542,16 +538,16 @@ if exceptions_log:
   for idx, ex in enumerate(exceptions_log, 1):
     st.text(f"{idx}. {ex}")
 
-# Check if data has been loaded yet
+# Check if data has been loaded yet (empty start on startup/refresh)
 if not st.session_state.saved_filtered_pool:
   st.info(
-      "👋 **Welcome!** Click the **'🔄 Run Quarterly Filter Update'** button in"
-      " the sidebar to load constituents and generate your quantitative"
-      " screening tables."
+      "👋 **Dashboard Initialized (Empty State).** Click the **'🔄 Run"
+      " Quarterly Filter Update'** button in the sidebar to load lists and"
+      " generate the screening tables."
   )
   st.stop()
 
-# Retrieve saved pool and metrics from session state (ensuring rerank does NOT overwrite saved list)
+# Retrieve saved pool and metrics from session state
 active_pool = st.session_state.saved_filtered_pool
 scores = st.session_state.saved_scores
 dma_status = st.session_state.saved_dma
@@ -564,14 +560,12 @@ if run_rerank_btn or not st.session_state.portfolio:
   current_portfolio = st.session_state.portfolio
   new_portfolio = []
 
-  # Step 1: Apply 15-rank buffer rule to existing holdings against saved pool
   for ticker in current_portfolio:
     if ticker in active_pool:
       current_rank = active_pool.index(ticker) + 1
       if current_rank <= 15:
         new_portfolio.append(ticker)
 
-  # Step 2: Fill remaining slots up to 10 from the top of the saved ranked list
   for ticker in active_pool:
     if len(new_portfolio) >= 10:
       break
