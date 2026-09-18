@@ -14,8 +14,8 @@ st.set_page_config(
 st.title("🌐 Global Quantitative Momentum Dashboard")
 st.markdown(
     "**Live Engine:** Dual-Strategy Architecture (Stock Momentum via ETF Holdings"
-    " + QMJ + Volatility-Scaled Momentum vs. UCITS ETF Pure 12-1 Momentum) +"
-    " No Volume Filters + Persistent Storage."
+    " + QMJ + Volatility-Scaled Momentum vs. Deduplicated UCITS ETF Pure 12-1"
+    " Momentum) + No Volume Filters + Persistent Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -105,7 +105,8 @@ strategy_mode = st.sidebar.radio(
             " Top 10)"
         ),
         (
-            "UCITS ETF Momentum (Core Liquid ETFs + Pure 12-1 Return + Top 3)"
+            "UCITS ETF Momentum (Deduplicated Core ETFs + Pure 12-1 Return +"
+            " Top 3)"
         ),
     ],
 )
@@ -133,7 +134,6 @@ run_rerank_btn = st.sidebar.button(
 # --- STOCK UNIVERSES LOADED DIRECTLY FROM ETF HOLDINGS ---
 def load_stock_universe_via_etfs():
   """Loads comprehensive stock universe using core institutional ETF holdings pools (SPY, QQQ, IWB)."""
-  # S&P 500 Core Holdings (SPY / IVV proxy pool)
   sp500_etf_holdings = [
       "MSFT",
       "AAPL",
@@ -196,8 +196,6 @@ def load_stock_universe_via_etfs():
       "ADI",
       "SYK",
   ]
-
-  # Nasdaq 100 Core Holdings (QQQ proxy pool)
   nasdaq_etf_holdings = [
       "TSLA",
       "AVGO",
@@ -230,8 +228,6 @@ def load_stock_universe_via_etfs():
       "EA",
       "MU",
   ]
-
-  # Russell 1000 Core Holdings (IWB proxy pool)
   russell_etf_holdings = [
       "PLTR",
       "CRWD",
@@ -264,7 +260,6 @@ def load_stock_universe_via_etfs():
       "HUM",
       "CNC",
   ]
-
   return sorted(
       list(
           set(sp500_etf_holdings + nasdaq_etf_holdings + russell_etf_holdings)
@@ -273,19 +268,16 @@ def load_stock_universe_via_etfs():
 
 
 def load_ucits_etf_universe():
-  """Full list of core UCITS ETFs (> $1B AUM)."""
+  """Deduplicated list of core UCITS ETFs (> $1B AUM) with unique index exposures."""
   return [
-      "IWDA.L",  # iShares Core MSCI World UCITS ETF
-      "SWDA.L",  # iShares Core MSCI World UCITS ETF (Acc)
-      "VUAA.L",  # Vanguard S&P 500 UCITS ETF
-      "SXR8.DE",  # iShares Core S&P 500 UCITS ETF
-      "EQQQ.L",  # Invesco EQQQ Nasdaq 100 UCITS ETF
-      "SXRV.DE",  # iShares Nasdaq 100 UCITS ETF
-      "EXSA.DE",  # iShares STOXX Europe 600 UCITS ETF
-      "QDVE.DE",  # iShares MSCI Global Semiconductors UCITS ETF
-      "XDWE.DE",  # Xtrackers MSCI World Health Care UCITS ETF
-      "AGGH.L",  # iShares Core Global Aggregate Bond UCITS ETF
-      "DTLA.L",  # iShares USD Treasury 20+ Year UCITS ETF
+      "IWDA.L",  # iShares Core MSCI World UCITS ETF (Developed World)
+      "VUAA.L",  # Vanguard S&P 500 UCITS ETF (US Large Cap)
+      "EQQQ.L",  # Invesco EQQQ Nasdaq 100 UCITS ETF (US Tech Growth)
+      "EXSA.DE",  # iShares STOXX Europe 600 UCITS ETF (Europe Large Cap)
+      "QDVE.DE",  # iShares MSCI Global Semiconductors UCITS ETF (Sector)
+      "XDWE.DE",  # Xtrackers MSCI World Health Care UCITS ETF (Sector)
+      "AGGH.L",  # iShares Core Global Aggregate Bond UCITS ETF (Bonds)
+      "DTLA.L",  # iShares USD Treasury 20+ Year UCITS ETF (Bonds)
   ]
 
 
@@ -369,7 +361,6 @@ if run_update_btn:
     st.session_state.saved_prices = df_prices
     st.session_state.saved_volumes = df_volumes
 
-    # No volume filter applied for either strategy now
     qualified_tickers = list(df_prices.columns)
     ticker_liquidity = {t: 0.0 for t in qualified_tickers}
 
@@ -393,7 +384,6 @@ if run_update_btn:
           vols[ticker] = vol_63 if vol_63 > 0 else 0.01
 
           if is_stock_strategy:
-            # Stock Strategy: Volatility-scaled momentum + QMJ quality filter
             mom_score = ret_12_1 / vols[ticker]
             if use_qmj and ticker in fmp_quality:
               q_score = max(0.1, fmp_quality[ticker])
@@ -401,7 +391,6 @@ if run_update_btn:
             else:
               scores[ticker] = mom_score
           else:
-            # ETF Strategy: Rank ONLY based on 12-1 return (no volatility scaling, no QMJ)
             scores[ticker] = ret_12_1
 
     ranked_universe = sorted(scores, key=lambda k: scores[k], reverse=True)
