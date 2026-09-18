@@ -14,8 +14,8 @@ st.set_page_config(
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
     "**Live Engine:** S&P 500 + Nasdaq 100 + Russell 1000 (Deduplicated) + ETF"
-    " Holdings Fallback + $500M+ Liquidity Filter + FMP QMJ Quality Filter +"
-    " Volatility-Scaled Momentum + 15-Rank Buffer."
+    " Holdings Fallback + **Hardcoded $500M Daily Volume Filter** + FMP QMJ"
+    " Quality Filter + Volatility-Scaled Momentum + 15-Rank Buffer."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -96,14 +96,7 @@ if "last_action" not in st.session_state:
 exceptions_log = []
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("1. Strategy & Liquidity Rules")
-min_liquidity_m = st.sidebar.slider(
-    "Min. Average Daily Volume ($M)",
-    min_value=100.0,
-    max_value=2000.0,
-    value=500.0,
-    step=50.0,
-)
+st.sidebar.header("1. Strategy & Risk Rules")
 use_qmj = st.sidebar.checkbox(
     "Enable FMP-Powered QMJ Quality Pre-Filter", value=True
 )
@@ -361,7 +354,6 @@ if run_quarterly_btn:
       "Loading S&P 500, Nasdaq 100, and Russell 1000 lists, fetching market"
       " data, and computing QMJ fundamentals..."
   ):
-    # Automatically aggregate all three core indices without optional switches
     selected_tickers = []
     selected_tickers.extend(fetch_sp500_tickers())
     selected_tickers.extend(fetch_nasdaq100_tickers())
@@ -374,7 +366,8 @@ if run_quarterly_btn:
     st.session_state.saved_prices = df_prices
     st.session_state.saved_volumes = df_volumes
 
-    min_dollar_vol = min_liquidity_m * 1e6
+    # Hardcoded $500M daily volume filter ($500,000,000)
+    min_dollar_vol = 500_000_000.0
     qualified_tickers = []
     ticker_liquidity = {}
 
@@ -539,7 +532,7 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
 df_display = pd.DataFrame(table_data)
 
 st.subheader(
-    f"🏆 Active Portfolio Leaderboard (Liquidity > ${min_liquidity_m}M/day)"
+    "🏆 Active Portfolio Leaderboard (Liquidity > $500M/day Hardcoded)"
 )
 st.info(f"**Execution Status:** {st.session_state.last_action}")
 st.dataframe(df_display, use_container_width=True)
