@@ -13,10 +13,9 @@ st.set_page_config(
 
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** Persistent Storage (Auto-Restores Last Saved List) +"
-    " ETF Holdings Fallback + $500M+ Liquidity Filter + FMP QMJ Quality"
-    " Filter + Volatility-Scaled Momentum + 15-Rank Buffer (Dynamic Top 10"
-    " Update)."
+    "**Live Engine:** S&P 500 + Nasdaq 100 + Russell 1000 (Deduplicated) + ETF"
+    " Holdings Fallback + $500M+ Liquidity Filter + FMP QMJ Quality Filter +"
+    " Volatility-Scaled Momentum + 15-Rank Buffer."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -97,17 +96,7 @@ if "last_action" not in st.session_state:
 exceptions_log = []
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("1. Universe Selection (Index & ETF Pools)")
-use_sp500 = st.sidebar.checkbox("S&P 500 (via SPY/IVV Holdings Pool)", value=True)
-use_nasdaq = st.sidebar.checkbox("Nasdaq 100 (via QQQ Holdings Pool)", value=True)
-use_russell1000 = st.sidebar.checkbox(
-    "Russell 1000 (via IWB Holdings Pool)", value=True
-)
-use_msci_world = st.sidebar.checkbox(
-    "Full MSCI World Developed International (US ADR Preferred)", value=True
-)
-
-st.sidebar.header("2. Strategy & Liquidity Rules")
+st.sidebar.header("1. Strategy & Liquidity Rules")
 min_liquidity_m = st.sidebar.slider(
     "Min. Average Daily Volume ($M)",
     min_value=100.0,
@@ -123,7 +112,7 @@ exit_vehicle = st.sidebar.selectbox(
     ["100% Cash / Risk-Free", "MSCI World ETF (URTH)"],
 )
 
-st.sidebar.header("3. Execution Controls")
+st.sidebar.header("2. Execution Controls")
 run_quarterly_btn = st.sidebar.button(
     "🔄 Run Quarterly Filter Update (Load/Refresh Lists)"
 )
@@ -369,155 +358,14 @@ def fetch_market_data(tickers):
 # --- QUARTERLY UPDATE EXECUTION & PERSISTENT SAVE ---
 if run_quarterly_btn:
   with st.spinner(
-      "Loading lists, fetching live market data, and computing QMJ"
-      " fundamentals..."
+      "Loading S&P 500, Nasdaq 100, and Russell 1000 lists, fetching market"
+      " data, and computing QMJ fundamentals..."
   ):
+    # Automatically aggregate all three core indices without optional switches
     selected_tickers = []
-    if use_sp500:
-      selected_tickers.extend(fetch_sp500_tickers())
-    if use_nasdaq:
-      selected_tickers.extend(fetch_nasdaq100_tickers())
-    if use_russell1000:
-      selected_tickers.extend(fetch_russell1000_tickers())
-
-    if use_msci_world:
-      msci_world_developed_full = [
-          "ASML",
-          "SHEL",
-          "AZN",
-          "SNY",
-          "NVO",
-          "TM",
-          "BHP",
-          "BP",
-          "GSK",
-          "RIO",
-          "SONY",
-          "MUFG",
-          "SMFG",
-          "HMC",
-          "ERIC",
-          "NOK",
-          "SAP",
-          "SIE.DE",
-          "ALV.DE",
-          "MBG.DE",
-          "BMW.DE",
-          "MC.PA",
-          "RMS.PA",
-          "TTE.PA",
-          "SAN.MC",
-          "BBVA.MC",
-          "IBE.MC",
-          "NESN.SW",
-          "NOVN.SW",
-          "ROG.SW",
-          "UBSG.SW",
-          "ABBN.SW",
-          "7203.T",
-          "6758.T",
-          "9984.T",
-          "6501.T",
-          "8035.T",
-          "CBA.AX",
-          "BHP.AX",
-          "CSL.AX",
-          "SHOP",
-          "ENB",
-          "CNI",
-          "CP",
-          "RY",
-          "TD",
-          "BN.TO",
-          "SU.TO",
-          "TRI.TO",
-          "BMO.TO",
-          "BNS.TO",
-          "CM.TO",
-          "MFC.TO",
-          "TRP.TO",
-          "SLF.TO",
-          "NA.TO",
-          "QSR.TO",
-          "WN.TO",
-          "IMO.TO",
-          "TECK-B.TO",
-          "FNV.TO",
-          "DOL.TO",
-          "MG.TO",
-          "ARE.TO",
-          "GIB-A.TO",
-          "ET.DE",
-          "DB1.DE",
-          "ADS.DE",
-          "MUV2.DE",
-          "IFX.DE",
-          "BAS.DE",
-          "BAYN.DE",
-          "VOW3.DE",
-          "DPW.DE",
-          "DTE.DE",
-          "RWE.DE",
-          "EOAN.DE",
-          "AIR.PA",
-          "OR.PA",
-          "SU.PA",
-          "SAN.PA",
-          "BN.PA",
-          "DG.PA",
-          "EN.PA",
-          "AI.PA",
-          "KER.PA",
-          "STLA.MI",
-          "ENEL.MI",
-          "UCG.MI",
-          "ISP.MI",
-          "FER.MC",
-          "ITX.MC",
-          "REP.MC",
-          "FLTR.L",
-          "REL.L",
-          "CRH.L",
-          "DGE.L",
-          "ULVR.L",
-          "GSK.L",
-          "BARC.L",
-          "LLOY.L",
-          "NWG.L",
-          "VOD.L",
-          "GLEN.L",
-          "AAL.L",
-          "ANTO.L",
-          "RR.L",
-          "EXPN.L",
-          "CPG.L",
-          "SGE.L",
-          "BDEV.L",
-          "IMB.L",
-          "PRU.L",
-          "LGEN.L",
-          "AV.L",
-          "MNG.L",
-          "STAN.L",
-          "EDV.L",
-          "FLTR.AS",
-          "ASML.AS",
-          "ADYEN.AS",
-          "HEIA.AS",
-          "INGA.AS",
-          "WKL.AS",
-          "PHIA.AS",
-          "DSM.AS",
-          "NN.AS",
-          "AGN.AS",
-          "KPN.AS",
-          "RAND.AS",
-          "TKWY.AS",
-          "BESI.AS",
-          "UMG.AS",
-          "ASM.AS",
-      ]
-      selected_tickers.extend(msci_world_developed_full)
+    selected_tickers.extend(fetch_sp500_tickers())
+    selected_tickers.extend(fetch_nasdaq100_tickers())
+    selected_tickers.extend(fetch_russell1000_tickers())
 
     selected_tickers = sorted(list(set(selected_tickers)))
     df_prices, df_volumes = fetch_market_data(selected_tickers)
@@ -623,14 +471,12 @@ if run_rerank_btn or not st.session_state.portfolio:
   current_portfolio = st.session_state.portfolio
   new_portfolio = []
 
-  # Step 1: Retain current holdings if they rank within the 15-rank buffer
   for ticker in current_portfolio:
     if ticker in active_pool:
       current_rank = active_pool.index(ticker) + 1
       if current_rank <= 15:
         new_portfolio.append(ticker)
 
-  # Step 2: Fill remaining slots up to 10 from the top of the saved ranked list
   for ticker in active_pool:
     if len(new_portfolio) >= 10:
       break
