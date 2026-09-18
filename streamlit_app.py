@@ -1,3 +1,5 @@
+import os
+import pickle
 import numpy as np
 import pandas as pd
 import requests
@@ -11,37 +13,84 @@ st.set_page_config(
 
 st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** On-Demand Lazy-Loaded Universe + ETF Holdings Fallback +"
-    " $500M+ Liquidity Filter + FMP QMJ Quality Filter + Volatility-Scaled"
-    " Momentum + 15-Rank Buffer (Isolated Rerank)."
+    "**Live Engine:** Persistent Storage (Auto-Restores Last Saved List) +"
+    " ETF Holdings Fallback + $500M+ Liquidity Filter + FMP QMJ Quality"
+    " Filter + Volatility-Scaled Momentum + 15-Rank Buffer (Isolated Rerank)."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
 FMP_KEY = st.secrets.get("FMP_API_KEY", "demo")
 
-# --- SESSION STATE INITIALIZATION (Empty Start on Refresh) ---
+# --- PERSISTENT STORAGE FILE PATH ---
+STATE_FILE = "dashboard_state.pkl"
+
+
+def save_persistent_state(state_dict):
+  try:
+    with open(STATE_FILE, "wb") as f:
+      pickle.dump(state_dict, f)
+  except Exception as e:
+    pass
+
+
+def load_persistent_state():
+  if os.path.exists(STATE_FILE):
+    try:
+      with open(STATE_FILE, "rb") as f:
+        return pickle.load(f)
+    except Exception as e:
+      return None
+  return None
+
+
+# --- INITIALIZATION WITH PERSISTENT STORAGE RESTORE ---
+persisted_data = load_persistent_state()
+
 if "portfolio" not in st.session_state:
-  st.session_state.portfolio = []
+  st.session_state.portfolio = (
+      persisted_data.get("portfolio", []) if persisted_data else []
+  )
 if "saved_filtered_pool" not in st.session_state:
-  st.session_state.saved_filtered_pool = []
+  st.session_state.saved_filtered_pool = (
+      persisted_data.get("saved_filtered_pool", []) if persisted_data else []
+  )
 if "saved_prices" not in st.session_state:
-  st.session_state.saved_prices = pd.DataFrame()
+  st.session_state.saved_prices = (
+      persisted_data.get("saved_prices", pd.DataFrame())
+      if persisted_data
+      else pd.DataFrame()
+  )
 if "saved_volumes" not in st.session_state:
-  st.session_state.saved_volumes = pd.DataFrame()
+  st.session_state.saved_volumes = (
+      persisted_data.get("saved_volumes", pd.DataFrame())
+      if persisted_data
+      else pd.DataFrame()
+  )
 if "saved_liquidity" not in st.session_state:
-  st.session_state.saved_liquidity = {}
+  st.session_state.saved_liquidity = (
+      persisted_data.get("saved_liquidity", {}) if persisted_data else {}
+  )
 if "saved_scores" not in st.session_state:
-  st.session_state.saved_scores = {}
+  st.session_state.saved_scores = (
+      persisted_data.get("saved_scores", {}) if persisted_data else {}
+  )
 if "saved_dma" not in st.session_state:
-  st.session_state.saved_dma = {}
+  st.session_state.saved_dma = (
+      persisted_data.get("saved_dma", {}) if persisted_data else {}
+  )
 if "saved_returns" not in st.session_state:
-  st.session_state.saved_returns = {}
+  st.session_state.saved_returns = (
+      persisted_data.get("saved_returns", {}) if persisted_data else {}
+  )
 if "saved_vols" not in st.session_state:
-  st.session_state.saved_vols = {}
+  st.session_state.saved_vols = (
+      persisted_data.get("saved_vols", {}) if persisted_data else {}
+  )
 if "last_action" not in st.session_state:
   st.session_state.last_action = (
-      "System initialized with empty list. Click 'Run Quarterly Filter Update'"
-      " to load data."
+      "System initialized from persistent storage."
+      if persisted_data
+      else "Initialized with empty list. Click 'Run Quarterly Filter Update'."
   )
 
 exceptions_log = []
@@ -316,7 +365,7 @@ def fetch_market_data(tickers):
   )
 
 
-# --- QUARTERLY UPDATE EXECUTION (EXPLICIT TRIGGER ONLY) ---
+# --- QUARTERLY UPDATE EXECUTION & PERSISTENT SAVE ---
 if run_quarterly_btn:
   with st.spinner(
       "Loading lists, fetching live market data, and computing QMJ"
@@ -530,6 +579,19 @@ if run_quarterly_btn:
         " stocks."
     )
 
+    # Save to persistent storage file
+    save_persistent_state({
+        "portfolio": st.session_state.portfolio,
+        "saved_filtered_pool": ranked_universe,
+        "saved_prices": df_prices,
+        "saved_volumes": df_volumes,
+        "saved_liquidity": ticker_liquidity,
+        "saved_scores": scores,
+        "saved_dma": dma_status,
+        "saved_returns": returns_12_1,
+        "saved_vols": vols,
+    })
+
 # --- DISPLAY LOGGED EXCEPTIONS ---
 if exceptions_log:
   st.warning(
@@ -538,7 +600,7 @@ if exceptions_log:
   for idx, ex in enumerate(exceptions_log, 1):
     st.text(f"{idx}. {ex}")
 
-# Check if data has been loaded yet (empty start on startup/refresh)
+# Check if data exists in persistent state / session state
 if not st.session_state.saved_filtered_pool:
   st.info(
       "👋 **Dashboard Initialized (Empty State).** Click the **'🔄 Run"
@@ -577,6 +639,19 @@ if run_rerank_btn or not st.session_state.portfolio:
       f"Monthly Rerank Executed: Applied 15-Rank Buffer Rule. Saved list"
       f" preserved. Portfolio holds {len(new_portfolio)} assets."
   )
+
+  # Update persistent storage with new portfolio state only (saved list untouched)
+  save_persistent_state({
+      "portfolio": new_portfolio,
+      "saved_filtered_pool": st.session_state.saved_filtered_pool,
+      "saved_prices": st.session_state.saved_prices,
+      "saved_volumes": st.session_state.saved_volumes,
+      "saved_liquidity": st.session_state.saved_liquidity,
+      "saved_scores": st.session_state.saved_scores,
+      "saved_dma": st.session_state.saved_dma,
+      "saved_returns": st.session_state.saved_returns,
+      "saved_vols": st.session_state.saved_vols,
+  })
 
 if not st.session_state.portfolio:
   st.session_state.portfolio = active_pool[:10]
