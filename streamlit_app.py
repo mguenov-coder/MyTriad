@@ -15,7 +15,8 @@ st.title("🌐 Global Triad Quantitative Momentum Dashboard")
 st.markdown(
     "**Live Engine:** Persistent Storage (Auto-Restores Last Saved List) +"
     " ETF Holdings Fallback + $500M+ Liquidity Filter + FMP QMJ Quality"
-    " Filter + Volatility-Scaled Momentum + 15-Rank Buffer (Isolated Rerank)."
+    " Filter + Volatility-Scaled Momentum + 15-Rank Buffer (Dynamic Top 10"
+    " Update)."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -127,7 +128,7 @@ run_quarterly_btn = st.sidebar.button(
     "🔄 Run Quarterly Filter Update (Load/Refresh Lists)"
 )
 run_rerank_btn = st.sidebar.button(
-    "📊 Run Monthly Rerank (Apply Buffer Rule)"
+    "📊 Run Monthly Rerank (Apply Buffer Rule & Update Top 10)"
 )
 
 
@@ -617,17 +618,19 @@ returns_12_1 = st.session_state.saved_returns
 vols = st.session_state.saved_vols
 ticker_liquidity = st.session_state.saved_liquidity
 
-# --- MONTHLY RERANK & 15-RANK BUFFER RULE LOGIC (ISOLATED) ---
+# --- MONTHLY RERANK & 15-RANK BUFFER RULE LOGIC (DYNAMIC TOP 10 UPDATE) ---
 if run_rerank_btn or not st.session_state.portfolio:
   current_portfolio = st.session_state.portfolio
   new_portfolio = []
 
+  # Step 1: Retain current holdings if they rank within the 15-rank buffer
   for ticker in current_portfolio:
     if ticker in active_pool:
       current_rank = active_pool.index(ticker) + 1
       if current_rank <= 15:
         new_portfolio.append(ticker)
 
+  # Step 2: Fill remaining slots up to 10 from the top of the saved ranked list
   for ticker in active_pool:
     if len(new_portfolio) >= 10:
       break
@@ -636,11 +639,11 @@ if run_rerank_btn or not st.session_state.portfolio:
 
   st.session_state.portfolio = new_portfolio
   st.session_state.last_action = (
-      f"Monthly Rerank Executed: Applied 15-Rank Buffer Rule. Saved list"
-      f" preserved. Portfolio holds {len(new_portfolio)} assets."
+      f"Monthly Rerank Executed: Applied 15-Rank Buffer Rule. Top 10 portfolio"
+      f" updated with {len(new_portfolio)} assets."
   )
 
-  # Update persistent storage with new portfolio state only (saved list untouched)
+  # Update persistent storage with new top 10 portfolio state
   save_persistent_state({
       "portfolio": new_portfolio,
       "saved_filtered_pool": st.session_state.saved_filtered_pool,
