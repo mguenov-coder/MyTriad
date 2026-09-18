@@ -15,7 +15,7 @@ st.set_page_config(
 st.title("🌐 Global Quantitative Momentum Dashboard")
 st.markdown(
     "**Live Engine:** Multi-Strategy Architecture (Stock Momentum via ETF Proxy"
-    " Lists vs. UCITS ETF Top-3 Rotation) + Hardcoded $500M Daily Volume Filter"
+    " Lists vs. UCITS ETF Top-3 Rotation) + Hardcoded $200M Daily Volume Filter"
     " + Persistent Storage."
 )
 
@@ -370,8 +370,8 @@ if run_update_btn:
     st.session_state.saved_prices = df_prices
     st.session_state.saved_volumes = df_volumes
 
-    # Hardcoded $500M daily volume filter ($500,000,000)
-    min_dollar_vol = 500_000_000.0
+    # Hardcoded $500M daily volume filter ($200,000,000)
+    min_dollar_vol = 200_000_000.0
     qualified_tickers = []
     ticker_liquidity = {}
 
