@@ -1,4 +1,3 @@
-
 import os
 import pickle
 import numpy as np
@@ -14,9 +13,9 @@ st.set_page_config(
 
 st.title("🌐 Global Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** Multi-Strategy Architecture (Stock Momentum via ETF Proxy"
-    " Lists vs. UCITS ETF Top-3 Rotation) + Hardcoded $200M Daily Volume Filter"
-    " + Persistent Storage."
+    "**Live Engine:** Dual-Strategy Architecture (Stock Momentum via ETF Holdings"
+    " + QMJ + Volatility-Scaled Momentum vs. UCITS ETF Pure 12-1 Momentum) +"
+    " No Volume Filters + Persistent Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -91,7 +90,7 @@ if "last_action" not in st.session_state:
   st.session_state.last_action = (
       "System initialized from persistent storage."
       if persisted_data
-      else "Initialized with empty list. Click 'Run Strategy Update'."
+      else "Initialized with empty list. Click 'Run Strategy Universe Update'."
   )
 
 exceptions_log = []
@@ -101,16 +100,21 @@ st.sidebar.header("1. Strategy Configuration")
 strategy_mode = st.sidebar.radio(
     "Select Strategy Mode",
     [
-        "Stock Momentum (S&P 500, Nasdaq, Russell via ETF Lists | Top 10 + QMJ)",
-        "UCITS ETF Momentum (Core Liquid UCITS ETFs | Top 3 Rotation)",
+        (
+            "Stock Momentum (S&P 500, Nasdaq, Russell via ETF Holdings + QMJ +"
+            " Top 10)"
+        ),
+        (
+            "UCITS ETF Momentum (Core Liquid ETFs + Pure 12-1 Return + Top 3)"
+        ),
     ],
 )
 
+is_stock_strategy = "Stock Momentum" in strategy_mode
+
 use_qmj = st.sidebar.checkbox(
     "Enable FMP-Powered QMJ Quality Pre-Filter (Stocks Only)",
-    value=True
-    if "Stock Momentum" in strategy_mode
-    else False,
+    value=True if is_stock_strategy else False,
 )
 exit_vehicle = st.sidebar.selectbox(
     "Destination Vehicle on 200-DMA Exit",
@@ -126,11 +130,11 @@ run_rerank_btn = st.sidebar.button(
 )
 
 
-# --- ETF-BASED STOCK LIST LOADERS (PROXIES FOR S&P 500, NASDAQ 100, RUSSELL 1000) ---
-def load_stock_lists_via_etfs():
-  """Loads comprehensive stock lists using institutional ETF holdings and representative index proxies."""
-  # S&P 500 Representative Holdings & Core Large-Cap Pool (via SPY/IVV proxy)
-  sp500_proxy = [
+# --- STOCK UNIVERSES LOADED DIRECTLY FROM ETF HOLDINGS ---
+def load_stock_universe_via_etfs():
+  """Loads comprehensive stock universe using core institutional ETF holdings pools (SPY, QQQ, IWB)."""
+  # S&P 500 Core Holdings (SPY / IVV proxy pool)
+  sp500_etf_holdings = [
       "MSFT",
       "AAPL",
       "NVDA",
@@ -193,11 +197,10 @@ def load_stock_lists_via_etfs():
       "SYK",
   ]
 
-  # Nasdaq 100 Representative Holdings Pool (via QQQ proxy)
-  nasdaq_proxy = [
+  # Nasdaq 100 Core Holdings (QQQ proxy pool)
+  nasdaq_etf_holdings = [
       "TSLA",
       "AVGO",
-      "HON",
       "SBUX",
       "LRCX",
       "PANW",
@@ -225,10 +228,11 @@ def load_stock_lists_via_etfs():
       "DXCM",
       "LULU",
       "EA",
+      "MU",
   ]
 
-  # Russell 1000 Representative Mid/Large-Cap Pool (via IWB proxy)
-  russell_proxy = [
+  # Russell 1000 Core Holdings (IWB proxy pool)
+  russell_etf_holdings = [
       "PLTR",
       "CRWD",
       "NOW",
@@ -261,14 +265,15 @@ def load_stock_lists_via_etfs():
       "CNC",
   ]
 
-  combined_stocks = sorted(
-      list(set(sp500_proxy + nasdaq_proxy + russell_proxy))
+  return sorted(
+      list(
+          set(sp500_etf_holdings + nasdaq_etf_holdings + russell_etf_holdings)
+      )
   )
-  return combined_stocks
 
 
 def load_ucits_etf_universe():
-  """Loads the Core Liquid UCITS ETF Universe (> $1B AUM)."""
+  """Full list of core UCITS ETFs (> $1B AUM)."""
   return [
       "IWDA.L",  # iShares Core MSCI World UCITS ETF
       "SWDA.L",  # iShares Core MSCI World UCITS ETF (Acc)
@@ -288,7 +293,7 @@ def get_fmp_quality_scores(tickers, api_key):
   quality_scores = {}
   for ticker in tickers:
     if "." in ticker:
-      continue  # Skip for ETFs
+      continue
     try:
       url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}?apikey={api_key}"
       resp = requests.get(url, timeout=1.0)
@@ -343,18 +348,12 @@ def fetch_market_data(tickers):
 
 # --- STRATEGY UPDATE EXECUTION & PERSISTENT SAVE ---
 if run_update_btn:
-  is_stock_strategy = "Stock Momentum" in strategy_mode
   target_universe = (
-      load_stock_lists_via_etfs()
+      load_stock_universe_via_etfs()
       if is_stock_strategy
       else load_ucits_etf_universe()
   )
-
-  mode_label = (
-      "Stock Momentum (via ETF Lists)"
-      if is_stock_strategy
-      else "UCITS ETF Momentum"
-  )
+  mode_label = "Stock Momentum" if is_stock_strategy else "UCITS ETF Momentum"
 
   with st.spinner(
       f"Loading {mode_label} universe, fetching market data, and computing"
@@ -370,22 +369,9 @@ if run_update_btn:
     st.session_state.saved_prices = df_prices
     st.session_state.saved_volumes = df_volumes
 
-    # Hardcoded $500M daily volume filter ($200,000,000)
-    min_dollar_vol = 200_000_000.0
-    qualified_tickers = []
-    ticker_liquidity = {}
-
-    for ticker in df_prices.columns:
-      if ticker in df_volumes.columns:
-        p_series = df_prices[ticker].dropna()
-        v_series = df_volumes[ticker].dropna()
-        common_idx = p_series.index.intersection(v_series.index)
-        if len(common_idx) > 63:
-          dollar_vol_series = p_series.loc[common_idx] * v_series.loc[common_idx]
-          avg_daily_vol = dollar_vol_series.iloc[-63:].mean()
-          ticker_liquidity[ticker] = avg_daily_vol
-          if avg_daily_vol >= min_dollar_vol:
-            qualified_tickers.append(ticker)
+    # No volume filter applied for either strategy now
+    qualified_tickers = list(df_prices.columns)
+    ticker_liquidity = {t: 0.0 for t in qualified_tickers}
 
     st.session_state.saved_liquidity = ticker_liquidity
     df_prices_qualified = df_prices[qualified_tickers]
@@ -406,12 +392,17 @@ if run_update_btn:
           vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
           vols[ticker] = vol_63 if vol_63 > 0 else 0.01
 
-          mom_score = ret_12_1 / vols[ticker]
-          if use_qmj and "." not in ticker and ticker in fmp_quality:
-            q_score = max(0.1, fmp_quality[ticker])
-            scores[ticker] = mom_score * q_score
+          if is_stock_strategy:
+            # Stock Strategy: Volatility-scaled momentum + QMJ quality filter
+            mom_score = ret_12_1 / vols[ticker]
+            if use_qmj and ticker in fmp_quality:
+              q_score = max(0.1, fmp_quality[ticker])
+              scores[ticker] = mom_score * q_score
+            else:
+              scores[ticker] = mom_score
           else:
-            scores[ticker] = mom_score
+            # ETF Strategy: Rank ONLY based on 12-1 return (no volatility scaling, no QMJ)
+            scores[ticker] = ret_12_1
 
     ranked_universe = sorted(scores, key=lambda k: scores[k], reverse=True)
 
@@ -425,7 +416,6 @@ if run_update_btn:
         " assets."
     )
 
-    # Save to persistent storage file
     save_persistent_state({
         "portfolio": st.session_state.portfolio,
         "saved_filtered_pool": ranked_universe,
@@ -463,7 +453,6 @@ returns_12_1 = st.session_state.saved_returns
 vols = st.session_state.saved_vols
 ticker_liquidity = st.session_state.saved_liquidity
 
-is_stock_strategy = "Stock Momentum" in strategy_mode
 target_slots = 10 if is_stock_strategy else 3
 
 # --- MONTHLY RERANK & 15-RANK BUFFER RULE LOGIC ---
@@ -522,17 +511,15 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
   pool_rank = (
       active_pool.index(ticker) + 1 if ticker in active_pool else "N/A"
   )
-  avg_vol_m = ticker_liquidity.get(ticker, 0) / 1e6
 
   table_data.append({
       "Portfolio Slot": i,
       "Ticker": ticker,
       "Saved Universe Rank": pool_rank,
-      "Daily Vol ($M)": f"${avg_vol_m:.1f}M",
       "200-DMA Trend": status,
       "12-1 Return": f"{returns_12_1.get(ticker, 0)*100:.1f}%",
       "Ann. Volatility": f"{vols.get(ticker, 0)*100:.1f}%",
-      "Risk-Adj Score": f"{scores.get(ticker, 0):.2f}",
+      "Momentum Score": f"{scores.get(ticker, 0):.4f}",
       "Target Allocation": alloc,
   })
 
@@ -558,16 +545,14 @@ st.markdown(
 full_universe_data = []
 for rank, ticker in enumerate(active_pool, 1):
   status = dma_status.get(ticker, "N/A")
-  avg_vol_m = ticker_liquidity.get(ticker, 0) / 1e6
 
   full_universe_data.append({
       "Rank": rank,
       "Ticker": ticker,
-      "Daily Vol ($M)": round(avg_vol_m, 1),
       "200-DMA Trend": status,
       "12-1 Return (%)": round(returns_12_1.get(ticker, 0) * 100, 1),
       "Ann. Volatility (%)": round(vols.get(ticker, 0) * 100, 1),
-      "Risk-Adj Score": round(scores.get(ticker, 0), 2),
+      "Momentum Score": round(scores.get(ticker, 0), 4),
   })
 
 df_full_universe = pd.DataFrame(full_universe_data)
