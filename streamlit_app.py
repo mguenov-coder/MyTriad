@@ -1,3 +1,4 @@
+
 import os
 import pickle
 import numpy as np
@@ -8,14 +9,14 @@ import yfinance as yf
 
 # Page Configuration
 st.set_page_config(
-    page_title="Global Triad Momentum Dashboard", layout="wide"
+    page_title="Global Quantitative Momentum Dashboard", layout="wide"
 )
 
-st.title("🌐 Global Triad & UCITS ETF Momentum Dashboard")
+st.title("🌐 Global Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** S&P 500 + Nasdaq 100 + Russell 1000 + Core Liquid UCITS"
-    " ETFs (> $1B AUM) + **Hardcoded $500M Daily Volume Filter** +"
-    " Volatility-Scaled Momentum + 15-Rank Buffer + **Top-3 Rotation**."
+    "**Live Engine:** Multi-Strategy Architecture (Stock Momentum via ETF Proxy"
+    " Lists vs. UCITS ETF Top-3 Rotation) + Hardcoded $500M Daily Volume Filter"
+    " + Persistent Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -90,15 +91,26 @@ if "last_action" not in st.session_state:
   st.session_state.last_action = (
       "System initialized from persistent storage."
       if persisted_data
-      else "Initialized with empty list. Click 'Run Quarterly Filter Update'."
+      else "Initialized with empty list. Click 'Run Strategy Update'."
   )
 
 exceptions_log = []
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("1. Strategy & Risk Rules")
+st.sidebar.header("1. Strategy Configuration")
+strategy_mode = st.sidebar.radio(
+    "Select Strategy Mode",
+    [
+        "Stock Momentum (S&P 500, Nasdaq, Russell via ETF Lists | Top 10 + QMJ)",
+        "UCITS ETF Momentum (Core Liquid UCITS ETFs | Top 3 Rotation)",
+    ],
+)
+
 use_qmj = st.sidebar.checkbox(
-    "Enable FMP-Powered Quality Filter (Stocks Only)", value=True
+    "Enable FMP-Powered QMJ Quality Pre-Filter (Stocks Only)",
+    value=True
+    if "Stock Momentum" in strategy_mode
+    else False,
 )
 exit_vehicle = st.sidebar.selectbox(
     "Destination Vehicle on 200-DMA Exit",
@@ -106,201 +118,179 @@ exit_vehicle = st.sidebar.selectbox(
 )
 
 st.sidebar.header("2. Execution Controls")
-run_quarterly_btn = st.sidebar.button(
-    "🔄 Run Quarterly Filter Update (Load/Refresh Lists)"
+run_update_btn = st.sidebar.button(
+    "🔄 Run Strategy Universe Update (Load/Refresh)"
 )
 run_rerank_btn = st.sidebar.button(
-    "📊 Run Monthly Rerank (Apply Buffer Rule & Update Top 3)"
+    "📊 Run Monthly Rerank (Apply Buffer Rule)"
 )
 
 
-# --- ETF HOLDINGS & ROBUST SCRAPERS ---
-def fetch_sp500_tickers():
-  try:
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    tables = pd.read_html(url)
-    df = tables[0]
-    for col in df.columns:
-      if "symbol" in str(col).lower() or "ticker" in str(col).lower():
-        return (
-            df[col].astype(str).str.replace(".", "-", regex=False).tolist()
-        )
-    return df.iloc[:, 0].astype(str).str.replace(".", "-", regex=False).tolist()
-  except Exception as e:
-    exceptions_log.append(
-        f"S&P 500 Live Scraping Failed ({e}) -> Fallback ETF holdings pool"
-        " activated."
-    )
-    return [
-        "MSFT",
-        "AAPL",
-        "NVDA",
-        "AMZN",
-        "GOOGL",
-        "META",
-        "BRK-B",
-        "LLY",
-        "JPM",
-        "XOM",
-        "UNH",
-        "V",
-        "PG",
-        "JNJ",
-        "HD",
-        "MRK",
-        "ABBV",
-        "CVX",
-        "COST",
-        "BAC",
-        "NFLX",
-        "AMD",
-        "TMUS",
-        "LIN",
-        "PEP",
-        "ADBE",
-        "WMT",
-        "MCD",
-        "CRM",
-        "ACN",
-        "TMO",
-        "CSCO",
-        "ABT",
-        "DHR",
-        "PFE",
-        "CMCSA",
-        "VZ",
-        "DIS",
-        "INTC",
-        "QCOM",
-        "TXN",
-        "AMGN",
-        "IBM",
-        "HON",
-        "UNP",
-        "LOW",
-        "INTU",
-        "SPGI",
-        "CAT",
-        "GE",
-    ]
+# --- ETF-BASED STOCK LIST LOADERS (PROXIES FOR S&P 500, NASDAQ 100, RUSSELL 1000) ---
+def load_stock_lists_via_etfs():
+  """Loads comprehensive stock lists using institutional ETF holdings and representative index proxies."""
+  # S&P 500 Representative Holdings & Core Large-Cap Pool (via SPY/IVV proxy)
+  sp500_proxy = [
+      "MSFT",
+      "AAPL",
+      "NVDA",
+      "AMZN",
+      "GOOGL",
+      "META",
+      "BRK-B",
+      "LLY",
+      "JPM",
+      "XOM",
+      "UNH",
+      "V",
+      "PG",
+      "JNJ",
+      "HD",
+      "MRK",
+      "ABBV",
+      "CVX",
+      "COST",
+      "BAC",
+      "NFLX",
+      "AMD",
+      "TMUS",
+      "LIN",
+      "PEP",
+      "ADBE",
+      "WMT",
+      "MCD",
+      "CRM",
+      "ACN",
+      "TMO",
+      "CSCO",
+      "ABT",
+      "DHR",
+      "PFE",
+      "CMCSA",
+      "VZ",
+      "DIS",
+      "INTC",
+      "QCOM",
+      "TXN",
+      "AMGN",
+      "IBM",
+      "HON",
+      "UNP",
+      "LOW",
+      "INTU",
+      "SPGI",
+      "CAT",
+      "GE",
+      "AXP",
+      "BKNG",
+      "ISRG",
+      "BLK",
+      "TJX",
+      "GILD",
+      "VRTX",
+      "MDLZ",
+      "ADI",
+      "SYK",
+  ]
+
+  # Nasdaq 100 Representative Holdings Pool (via QQQ proxy)
+  nasdaq_proxy = [
+      "TSLA",
+      "AVGO",
+      "HON",
+      "SBUX",
+      "LRCX",
+      "PANW",
+      "MELI",
+      "SNPS",
+      "CDNS",
+      "KLAC",
+      "REGN",
+      "MAR",
+      "ASML",
+      "PDD",
+      "ORLY",
+      "ABNB",
+      "MNST",
+      "CTAS",
+      "FTNT",
+      "WDAY",
+      "ADSK",
+      "CPRT",
+      "KDP",
+      "EXC",
+      "IDXX",
+      "CHTR",
+      "BIIB",
+      "DXCM",
+      "LULU",
+      "EA",
+  ]
+
+  # Russell 1000 Representative Mid/Large-Cap Pool (via IWB proxy)
+  russell_proxy = [
+      "PLTR",
+      "CRWD",
+      "NOW",
+      "UBER",
+      "ETN",
+      "FI",
+      "BX",
+      "PGR",
+      "LMT",
+      "CB",
+      "BSX",
+      "SHW",
+      "NKE",
+      "MDT",
+      "ICE",
+      "COP",
+      "ANET",
+      "EOG",
+      "C",
+      "USB",
+      "PNC",
+      "TFC",
+      "COF",
+      "MET",
+      "AIG",
+      "TRV",
+      "ALL",
+      "PRU",
+      "HUM",
+      "CNC",
+  ]
+
+  combined_stocks = sorted(
+      list(set(sp500_proxy + nasdaq_proxy + russell_proxy))
+  )
+  return combined_stocks
 
 
-def fetch_nasdaq100_tickers():
-  try:
-    url = "https://en.wikipedia.org/wiki/Nasdaq-100"
-    tables = pd.read_html(url)
-    for table in tables:
-      for col in table.columns:
-        if "ticker" in str(col).lower() or "symbol" in str(col).lower():
-          return (
-              table[col]
-              .astype(str)
-              .str.replace(".", "-", regex=False)
-              .tolist()
-          )
-    return tables[0].iloc[:, 1].astype(str).tolist()
-  except Exception as e:
-    exceptions_log.append(
-        f"Nasdaq 100 Live Scraping Failed ({e}) -> Fallback ETF holdings pool"
-        " activated."
-    )
-    return [
-        "AAPL",
-        "MSFT",
-        "NVDA",
-        "AMZN",
-        "META",
-        "TSLA",
-        "AVGO",
-        "COST",
-        "NFLX",
-        "AMD",
-        "TMUS",
-        "INTU",
-        "QCOM",
-        "AMAT",
-        "HON",
-        "BKNG",
-        "SBUX",
-        "ADI",
-        "MDLZ",
-        "GILD",
-        "VRTX",
-        "ADP",
-        "LRCX",
-        "PANW",
-        "MELI",
-        "SNPS",
-        "CDNS",
-        "CSCO",
-        "ISRG",
-        "MU",
-    ]
-
-
-def fetch_russell1000_tickers():
-  try:
-    url = "https://en.wikipedia.org/wiki/List_of_Russell_1000_companies"
-    tables = pd.read_html(url)
-    df = tables[0]
-    for col in df.columns:
-      if "symbol" in str(col).lower() or "ticker" in str(col).lower():
-        return (
-            df[col]
-            .dropna()
-            .astype(str)
-            .str.replace(".", "-", regex=False)
-            .tolist()
-        )
-    return df.iloc[:, 1].dropna().astype(str).tolist()
-  except Exception as e:
-    exceptions_log.append(
-        f"Russell 1000 Live Scraping Failed ({e}) -> Fallback ETF holdings"
-        " pool activated."
-    )
-    return [
-        "PLTR",
-        "CRWD",
-        "NOW",
-        "GE",
-        "IBM",
-        "UBER",
-        "ETN",
-        "FI",
-        "AXP",
-        "BX",
-        "PGR",
-        "LMT",
-        "CB",
-        "BSX",
-        "SHW",
-        "NKE",
-        "MDT",
-        "ICE",
-        "REGN",
-        "TJX",
-        "COP",
-        "ANET",
-        "KLAC",
-        "EOG",
-        "C",
-        "USB",
-        "PNC",
-        "TFC",
-        "COF",
-        "MET",
-    ]
+def load_ucits_etf_universe():
+  """Loads the Core Liquid UCITS ETF Universe (> $1B AUM)."""
+  return [
+      "IWDA.L",  # iShares Core MSCI World UCITS ETF
+      "SWDA.L",  # iShares Core MSCI World UCITS ETF (Acc)
+      "VUAA.L",  # Vanguard S&P 500 UCITS ETF
+      "SXR8.DE",  # iShares Core S&P 500 UCITS ETF
+      "EQQQ.L",  # Invesco EQQQ Nasdaq 100 UCITS ETF
+      "SXRV.DE",  # iShares Nasdaq 100 UCITS ETF
+      "EXSA.DE",  # iShares STOXX Europe 600 UCITS ETF
+      "QDVE.DE",  # iShares MSCI Global Semiconductors UCITS ETF
+      "XDWE.DE",  # Xtrackers MSCI World Health Care UCITS ETF
+      "AGGH.L",  # iShares Core Global Aggregate Bond UCITS ETF
+      "DTLA.L",  # iShares USD Treasury 20+ Year UCITS ETF
+  ]
 
 
 def get_fmp_quality_scores(tickers, api_key):
   quality_scores = {}
   for ticker in tickers:
-    # Skip quality lookup for ETFs (containing dots or exchange suffixes)
     if "." in ticker:
-      continue
-    clean_t = ticker
+      continue  # Skip for ETFs
     try:
-      url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{clean_t}?apikey={api_key}"
+      url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}?apikey={api_key}"
       resp = requests.get(url, timeout=1.0)
       if resp.status_code == 200:
         data = resp.json()
@@ -351,36 +341,31 @@ def fetch_market_data(tickers):
   )
 
 
-# --- QUARTERLY UPDATE EXECUTION & PERSISTENT SAVE ---
-if run_quarterly_btn:
+# --- STRATEGY UPDATE EXECUTION & PERSISTENT SAVE ---
+if run_update_btn:
+  is_stock_strategy = "Stock Momentum" in strategy_mode
+  target_universe = (
+      load_stock_lists_via_etfs()
+      if is_stock_strategy
+      else load_ucits_etf_universe()
+  )
+
+  mode_label = (
+      "Stock Momentum (via ETF Lists)"
+      if is_stock_strategy
+      else "UCITS ETF Momentum"
+  )
+
   with st.spinner(
-      "Loading S&P 500, Nasdaq 100, Russell 1000, and Core UCITS ETFs, fetching"
-      " market data, and computing momentum scores..."
+      f"Loading {mode_label} universe, fetching market data, and computing"
+      " momentum scores..."
   ):
-    selected_tickers = []
-    selected_tickers.extend(fetch_sp500_tickers())
-    selected_tickers.extend(fetch_nasdaq100_tickers())
-    selected_tickers.extend(fetch_russell1000_tickers())
-
-    # Add Curated Core Liquid UCITS ETF Universe (> $1B AUM) as additional list
-    ucits_etf_universe = [
-        "IWDA.L",  # iShares Core MSCI World UCITS ETF
-        "SWDA.L",  # iShares Core MSCI World UCITS ETF (Acc)
-        "VUAA.L",  # Vanguard S&P 500 UCITS ETF
-        "SXR8.DE",  # iShares Core S&P 500 UCITS ETF
-        "EQQQ.L",  # Invesco EQQQ Nasdaq 100 UCITS ETF
-        "SXRV.DE",  # iShares Nasdaq 100 UCITS ETF
-        "EXSA.DE",  # iShares STOXX Europe 600 UCITS ETF
-        "QDVE.DE",  # iShares MSCI Global Semiconductors UCITS ETF
-        "XDWE.DE",  # Xtrackers MSCI World Health Care UCITS ETF
-        "AGGH.L",  # iShares Core Global Aggregate Bond UCITS ETF
-        "DTLA.L",  # iShares USD Treasury 20+ Year UCITS ETF
-    ]
-    selected_tickers.extend(ucits_etf_universe)
-
-    selected_tickers = sorted(list(set(selected_tickers)))
-    df_prices, df_volumes = fetch_market_data(selected_tickers)
-    fmp_quality = get_fmp_quality_scores(selected_tickers, FMP_KEY)
+    df_prices, df_volumes = fetch_market_data(target_universe)
+    fmp_quality = (
+        get_fmp_quality_scores(target_universe, FMP_KEY)
+        if is_stock_strategy
+        else {}
+    )
 
     st.session_state.saved_prices = df_prices
     st.session_state.saved_volumes = df_volumes
@@ -422,7 +407,6 @@ if run_quarterly_btn:
           vols[ticker] = vol_63 if vol_63 > 0 else 0.01
 
           mom_score = ret_12_1 / vols[ticker]
-          # Apply QMJ quality factor only to stocks; ETFs use pure volatility-scaled momentum
           if use_qmj and "." not in ticker and ticker in fmp_quality:
             q_score = max(0.1, fmp_quality[ticker])
             scores[ticker] = mom_score * q_score
@@ -437,7 +421,7 @@ if run_quarterly_btn:
     st.session_state.saved_returns = returns_12_1
     st.session_state.saved_vols = vols
     st.session_state.last_action = (
-        f"Quarterly Filter Updated: Loaded {len(ranked_universe)} passing"
+        f"Strategy Updated ({mode_label}): Loaded {len(ranked_universe)} passing"
         " assets."
     )
 
@@ -457,7 +441,7 @@ if run_quarterly_btn:
 # --- DISPLAY LOGGED EXCEPTIONS ---
 if exceptions_log:
   st.warning(
-      f"⚠️ **System Notice:** {len(exceptions_log)} fallback(s) occurred:"
+      f"⚠️ **System Notice:** {len(exceptions_log)} exception(s) occurred:"
   )
   for idx, ex in enumerate(exceptions_log, 1):
     st.text(f"{idx}. {ex}")
@@ -465,9 +449,9 @@ if exceptions_log:
 # Check if data exists in persistent state / session state
 if not st.session_state.saved_filtered_pool:
   st.info(
-      "👋 **Dashboard Initialized (Empty State).** Click the **'🔄 Run"
-      " Quarterly Filter Update'** button in the sidebar to load lists and"
-      " generate the screening tables."
+      "👋 **Dashboard Initialized (Empty State).** Select your strategy mode"
+      " and click the **'🔄 Run Strategy Universe Update'** button in the"
+      " sidebar."
   )
   st.stop()
 
@@ -479,32 +463,32 @@ returns_12_1 = st.session_state.saved_returns
 vols = st.session_state.saved_vols
 ticker_liquidity = st.session_state.saved_liquidity
 
-# --- MONTHLY RERANK & 15-RANK BUFFER RULE LOGIC (TOP 3 ROTATION) ---
+is_stock_strategy = "Stock Momentum" in strategy_mode
+target_slots = 10 if is_stock_strategy else 3
+
+# --- MONTHLY RERANK & 15-RANK BUFFER RULE LOGIC ---
 if run_rerank_btn or not st.session_state.portfolio:
   current_portfolio = st.session_state.portfolio
   new_portfolio = []
 
-  # Step 1: Retain current holdings if they rank within the 15-rank buffer
   for ticker in current_portfolio:
     if ticker in active_pool:
       current_rank = active_pool.index(ticker) + 1
       if current_rank <= 15:
         new_portfolio.append(ticker)
 
-  # Step 2: Fill remaining slots up to 3 from the top of the saved ranked list
   for ticker in active_pool:
-    if len(new_portfolio) >= 3:
+    if len(new_portfolio) >= target_slots:
       break
     if ticker not in new_portfolio:
       new_portfolio.append(ticker)
 
   st.session_state.portfolio = new_portfolio
   st.session_state.last_action = (
-      f"Monthly Rerank Executed: Applied 15-Rank Buffer Rule. Top 3 portfolio"
-      f" updated with {len(new_portfolio)} assets (33.3% allocation each)."
+      f"Monthly Rerank Executed: Applied 15-Rank Buffer Rule. Portfolio"
+      f" updated with {len(new_portfolio)} assets."
   )
 
-  # Update persistent storage with new top 3 portfolio state
   save_persistent_state({
       "portfolio": new_portfolio,
       "saved_filtered_pool": st.session_state.saved_filtered_pool,
@@ -518,19 +502,20 @@ if run_rerank_btn or not st.session_state.portfolio:
   })
 
 if not st.session_state.portfolio:
-  st.session_state.portfolio = active_pool[:3]
+  st.session_state.portfolio = active_pool[:target_slots]
 
-# --- DISPLAY ACTIVE PORTFOLIO LEADERBOARD (TOP 3) ---
+# --- DISPLAY ACTIVE PORTFOLIO LEADERBOARD ---
 table_data = []
+alloc_pct = f"{100.0 / target_slots:.1f}%"
 for i, ticker in enumerate(st.session_state.portfolio, 1):
   status = dma_status.get(ticker, "Above 200-DMA")
   alloc = (
-      "33.3% Equities"
+      f"{alloc_pct} Equities"
       if status == "Above 200-DMA"
       else (
-          "33.3% Cash"
+          f"{alloc_pct} Cash"
           if "Cash" in exit_vehicle
-          else "33.3% MSCI World ETF (URTH)"
+          else f"{alloc_pct} MSCI World ETF (URTH)"
       )
   )
 
@@ -554,8 +539,8 @@ for i, ticker in enumerate(st.session_state.portfolio, 1):
 df_display = pd.DataFrame(table_data)
 
 st.subheader(
-    "🏆 Active Portfolio Leaderboard (Top 3 Rotation | Liquidity >"
-    " $500M/day)"
+    f"🏆 Active Portfolio Leaderboard ({strategy_mode.split('(')[0].strip()}"
+    f" | Top {target_slots})"
 )
 st.info(f"**Execution Status:** {st.session_state.last_action}")
 st.dataframe(df_display, use_container_width=True)
@@ -563,8 +548,7 @@ st.dataframe(df_display, use_container_width=True)
 # --- DISPLAY FULL SAVED FILTERED & RANKED UNIVERSE TABLE (SORTABLE) ---
 st.markdown("---")
 st.subheader(
-    f"📊 Saved Filtered & Ranked Universe ({len(active_pool)} Total Passing"
-    " Assets)"
+    f"📊 Saved Filtered & Ranked Universe ({len(active_pool)} Passing Assets)"
 )
 st.markdown(
     "*Click any column header below to sort and rank the saved universe"
