@@ -7,6 +7,9 @@ import requests
 import streamlit as st
 import yfinance as yf
 
+# --- KAGGLEHUB AUTHENTICATION ---
+os.environ["KAGGLE_API_TOKEN"] = "KGAT_30f05c3dade1c0578df8060ea80c607d"
+
 # Page Configuration
 st.set_page_config(
     page_title="Multi-Index Quantitative Momentum Dashboard", layout="wide"
@@ -15,7 +18,7 @@ st.set_page_config(
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
     "**Engine:** KaggleHub Constituent Lists (S&P 500, Nasdaq 100, Russell 1000,"
-    " STOXX 600) + 12-1 Momentum & Volatility-Adjusted Ranking + Permanent"
+    " STOXX 600) + 12-1 Return & Volatility-Adjusted Ranking + Permanent"
     " Storage."
 )
 
@@ -87,10 +90,9 @@ reload_data_btn = st.sidebar.button(
 
 # --- KAGGLEHUB CONSTITUENT FETCHERS ---
 def fetch_constituents_via_kagglehub():
-  """Downloads index constituent files or datasets via kagglehub and extracts ticker lists."""
+  """Downloads index constituent files or datasets via kagglehub using token authentication."""
   lists = {}
   try:
-    # Example Kaggle dataset downloads for index constituents / stock lists
     # S&P 500 dataset path via kagglehub
     sp500_path = kagglehub.dataset_download("codebynadiia/s-and-p-500-companies-list-with-sectors")
     sp_file = [
@@ -100,7 +102,6 @@ def fetch_constituents_via_kagglehub():
         if f.endswith(".csv")
     ][0]
     df_sp = pd.read_csv(sp_file)
-    # Search for symbol/ticker column
     sym_col = next(
         (
             c
@@ -138,7 +139,6 @@ def fetch_constituents_via_kagglehub():
     ]
 
   try:
-    # Nasdaq 100 fallback/Kaggle dataset source
     lists["Nasdaq 100"] = [
         "AAPL",
         "MSFT",
@@ -191,9 +191,7 @@ def fetch_constituents_via_kagglehub():
     lists["Russell 1000"] = ["PLTR", "CRWD", "NOW", "GE", "IBM"]
 
   try:
-    # STOXX 600 via Kagglehub or European tickers
     stoxx_path = kagglehub.dataset_download("paavum/stoxx600")
-    # We load representative European tickers if parquet/csv is present
     lists["STOXX 600"] = [
         "ASML.AS",
         "SHEL.L",
@@ -252,7 +250,6 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
     st.warning("Please refresh or load constituent lists first.")
   else:
     with st.spinner("Downloading price data, market caps, daily volumes, and computing 12-1 / Adjusted rankings..."):
-      # Combine tickers based on user checkboxes
       active_tickers = []
       ticker_index_map = {}
 
@@ -279,7 +276,6 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
 
       active_tickers = sorted(list(set(active_tickers)))
 
-      # Fetch historical price and volume data via yfinance in chunks
       chunk_size = 150
       all_prices = []
       all_volumes = []
@@ -315,19 +311,15 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
         v_series = df_volumes[ticker].dropna() if ticker in df_volumes.columns else pd.Series(dtype=float)
 
         if len(series) > 252:
-          # 12-1 Return: Return from 252 days ago to 21 days ago (skipping last month)
           price_12m_ago = series.iloc[-252]
           price_1m_ago = series.iloc[-21]
           ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
 
-          # Annualized Volatility (63-day standard deviation of daily returns)
           vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
           vol_63 = vol_63 if vol_63 > 0 else 0.01
 
-          # Volatility-adjusted score (Sharpe-like momentum score)
           adj_score = ret_12_1 / vol_63
 
-          # Average Daily Volume & Market Cap estimation via yfinance ticker info
           avg_daily_vol = v_series.iloc[-63:].mean() if not v_series.empty else 0.0
           
           mcap = 0
@@ -339,7 +331,6 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
 
           metrics_data.append({
               "Ticker": ticker,
-              "Index": ticker_index_map.get(ticker, "Mixed"),
               "Market Cap": mcap,
               "Daily Volume": avg_daily_vol,
               "12-1 Return (%)": ret_12_1 * 100.0,
@@ -350,13 +341,9 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
       df_metrics = pd.DataFrame(metrics_data)
 
       if not df_metrics.empty:
-        # Calculate 12-1 Rank (descending by 12-1 Return)
         df_metrics["12-1 Rank"] = df_metrics["12-1 Return (%)"].rank(ascending=False, method="min").astype(int)
-
-        # Calculate Volatility-Adjusted Rank (descending by Adj Score)
         df_metrics["Adjusted Rank"] = df_metrics["Adj Score"].rank(ascending=False, method="min").astype(int)
 
-        # Drop helper column
         df_metrics = df_metrics.drop(columns=["Adj Score"])
         df_metrics = df_metrics.sort_values(by="12-1 Rank")
 
@@ -384,7 +371,6 @@ if df_display.empty:
 else:
   st.markdown("*Click any column header below to sort the table interactively.*")
   
-  # Format numeric columns for clean presentation while keeping underlying numbers sortable
   st.dataframe(
       df_display.style.format({
           "Market Cap": "{:,.0f}",
