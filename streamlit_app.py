@@ -14,9 +14,9 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Embedded CSV Constituent Lists (Russell 1000, S&P 500, Nasdaq"
-    " 100) + **$10B+ Market Cap Filter** + 12-1 Return & Volatility-Adjusted"
-    " Ranking + Permanent Storage."
+    "**Engine:** Embedded CSV Lists (Russell 1000, S&P 500, Nasdaq 100) +"
+    " **$20B+ Market Cap Filter** + **Daily Dollar Average** + **QMJ Quality"
+    " Filter Toggle** + Permanent Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -75,7 +75,12 @@ show_russell = st.sidebar.checkbox("Russell 1000", value=True)
 show_sp500 = st.sidebar.checkbox("S&P 500", value=True)
 show_nasdaq = st.sidebar.checkbox("Nasdaq 100", value=True)
 
-st.sidebar.header("2. Data & Execution Controls")
+st.sidebar.header("2. Strategy & Filter Rules")
+use_qmj = st.sidebar.checkbox(
+    "Enable FMP QMJ / Quality Filter", value=True
+)  # QMJ/JVM toggle
+
+st.sidebar.header("3. Execution Controls")
 refresh_lists_btn = st.sidebar.button(
     "🔄 Refresh Constituent Lists (Embedded Data)"
 )
@@ -735,6 +740,25 @@ MELI,MercadoLibre Inc.,Consumer Discretionary
 MNST,Monster Beverage Corp.,Consumer Staples"""
 
 
+def get_fmp_quality_scores(tickers, api_key):
+  quality_scores = {}
+  for ticker in tickers:
+    clean_t = ticker.replace("-", ".")
+    try:
+      url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{clean_t}?apikey={api_key}"
+      resp = requests.get(url, timeout=1.0)
+      if resp.status_code == 200:
+        data = resp.json()
+        if data and isinstance(data, list):
+          metrics = data[0]
+          roe = metrics.get("roeTTM", 0) or 0
+          gpm = metrics.get("grossProfitMarginTTM", 0) or 0
+          quality_scores[ticker] = (roe * 0.6) + (gpm * 0.4)
+    except Exception:
+      continue
+  return quality_scores
+
+
 # --- BUTTON 1: REFRESH CONSTITUENT LISTS ---
 if refresh_lists_btn or not st.session_state.constituent_dataframes:
   with st.spinner("Loading embedded CSV constituent lists..."):
@@ -770,21 +794,20 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
     st.warning("Please refresh or load constituent lists first.")
   else:
     with st.spinner(
-        "Filtering for >$10B market cap, downloading price data, and computing"
-        " 12-1 / Volatility-adjusted rankings..."
+        "Filtering for >$20B market cap, downloading price/volume data, and"
+        " computing rankings..."
     ):
       active_tickers = []
       ticker_index_map = {}
 
       dfs = st.session_state.constituent_dataframes
 
-      # Process Russell 1000
+      # Process Russell 1000 (> $20B Market Cap Filter)
       if show_russell and "Russell 1000" in dfs:
         df_r = dfs["Russell 1000"]
         for _, row in df_r.iterrows():
           t = str(row["ticker"]).strip().replace(".", "-")
           mcap_str = str(row.get("market_cap_usd", "0"))
-          # Parse market cap suffixes (T = Trillion, B = Billion, M = Million)
           mcap_val = 0.0
           try:
             if "T" in mcap_str.upper():
@@ -796,15 +819,14 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             else:
               mcap_val = float(mcap_str)
           except Exception:
-            mcap_val = 15e9  # Default pass-through if unparsable
+            mcap_val = 25e9
 
-          # Filter: > $10B Market Cap
-          if mcap_val >= 10e9:
+          if mcap_val >= 20e9:
             if t not in active_tickers:
               active_tickers.append(t)
               ticker_index_map[t] = "Russell 1000"
 
-      # Process S&P 500 (Assume all S&P 500 stocks > $10B)
+      # Process S&P 500
       if show_sp500 and "S&P 500" in dfs:
         df_s = dfs["S&P 500"]
         sym_col = next(
@@ -821,7 +843,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             active_tickers.append(t)
             ticker_index_map[t] = "S&P 500"
 
-      # Process Nasdaq 100 (Assume all Nasdaq 100 stocks > $10B)
+      # Process Nasdaq 100
       if show_nasdaq and "Nasdaq 100" in dfs:
         df_n = dfs["Nasdaq 100"]
         sym_col = next(
@@ -841,8 +863,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
       active_tickers = sorted(list(set(active_tickers)))
 
       chunk_size = 150
-      all_prices = []
-      all_volumes = []
+      all_prices, all_volumes = [], []
 
       for i in range(0, len(active_tickers), chunk_size):
         chunk = active_tickers[i : i + chunk_size]
@@ -880,6 +901,9 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
           else pd.DataFrame()
       )
 
+      fmp_quality = (
+          get_fmp_quality_scores(active_tickers, FMP_KEY) if use_qmj else {}
+      )
       metrics_data = []
 
       for ticker in df_prices.columns:
@@ -898,11 +922,24 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
           vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
           vol_63 = vol_63 if vol_63 > 0 else 0.01
 
-          adj_score = ret_12_1 / vol_63
+          # Daily Dollar Average (Price * Volume) over last 63 sessions
+          common_idx = series.index.intersection(v_series.index)
+          if len(common_idx) > 0:
+            dollar_vol_series = series.loc[common_idx] * v_series.loc[common_idx]
+            avg_daily_dollar_vol = (
+                dollar_vol_series.iloc[-63:].mean()
+                if len(dollar_vol_series) >= 63
+                else dollar_vol_series.mean()
+            )
+          else:
+            avg_daily_dollar_vol = 0.0
 
-          avg_daily_vol = (
-              v_series.iloc[-63:].mean() if not v_series.empty else 0.0
-          )
+          mom_score = ret_12_1 / vol_63
+          if use_qmj and ticker in fmp_quality:
+            q_score = max(0.1, fmp_quality[ticker])
+            adj_score = mom_score * q_score
+          else:
+            adj_score = mom_score
 
           mcap = 0
           try:
@@ -911,12 +948,12 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
           except Exception:
             pass
 
-          # Double check live market cap > $10B if available, otherwise rely on csv filter
-          if mcap == 0 or mcap >= 10e9:
+          # Enforce $20B+ market cap filter
+          if mcap == 0 or mcap >= 20e9:
             metrics_data.append({
                 "Ticker": ticker,
                 "Market Cap": mcap,
-                "Daily Volume": avg_daily_vol,
+                "Daily Dollar Avg ($)": avg_daily_dollar_vol,
                 "12-1 Return (%)": ret_12_1 * 100.0,
                 "Volatility (%)": vol_63 * 100.0,
                 "Adj Score": adj_score,
@@ -941,7 +978,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
 
       st.session_state.calculated_metrics = df_metrics
       st.session_state.last_action = (
-          "Filtered for >$10B market cap, reloaded price data, and recalculated"
+          "Filtered for >$20B market cap, reloaded price data, and recalculated"
           " metrics successfully."
       )
       save_persistent_state({
@@ -956,7 +993,7 @@ if exceptions_log:
       st.warning(ex)
 
 # --- DISPLAY DASHBOARD TABLE ---
-st.subheader("📊 Quantitative Momentum & Volatility Table ($10B+ Market Cap)")
+st.subheader("📊 Quantitative Momentum & Volatility Table ($20B+ Market Cap)")
 st.info(f"**Status:** {st.session_state.last_action}")
 
 df_display = st.session_state.calculated_metrics
@@ -974,7 +1011,7 @@ else:
   st.dataframe(
       df_display.style.format({
           "Market Cap": "{:,.0f}",
-          "Daily Volume": "{:,.0f}",
+          "Daily Dollar Avg ($)": "{:,.0f}",
           "12-1 Return (%)": "{:.2f}%",
           "Volatility (%)": "{:.2f}%",
       }),
