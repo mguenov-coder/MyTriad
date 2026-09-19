@@ -14,8 +14,9 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Embedded CSV Constituent Lists (Russell 1000, S&P 500) + 12-1"
-    " Return & Volatility-Adjusted Ranking + Permanent Storage."
+    "**Engine:** Embedded CSV Constituent Lists (Russell 1000, S&P 500, Nasdaq"
+    " 100) + **$10B+ Market Cap Filter** + 12-1 Return & Volatility-Adjusted"
+    " Ranking + Permanent Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -46,9 +47,9 @@ def load_persistent_state():
 # --- INITIALIZATION WITH PERSISTENT STORAGE RESTORE ---
 persisted_data = load_persistent_state()
 
-if "constituent_lists" not in st.session_state:
-  st.session_state.constituent_lists = (
-      persisted_data.get("constituent_lists", {}) if persisted_data else {}
+if "constituent_dataframes" not in st.session_state:
+  st.session_state.constituent_dataframes = (
+      persisted_data.get("constituent_dataframes", {}) if persisted_data else {}
   )
 if "calculated_metrics" not in st.session_state:
   st.session_state.calculated_metrics = (
@@ -72,6 +73,7 @@ exceptions_log = []
 st.sidebar.header("1. Index Selection Checkboxes")
 show_russell = st.sidebar.checkbox("Russell 1000", value=True)
 show_sp500 = st.sidebar.checkbox("S&P 500", value=True)
+show_nasdaq = st.sidebar.checkbox("Nasdaq 100", value=True)
 
 st.sidebar.header("2. Data & Execution Controls")
 refresh_lists_btn = st.sidebar.button(
@@ -82,7 +84,7 @@ reload_data_btn = st.sidebar.button(
 )
 
 
-# --- EMBEDDED CSV DATA DATASETS ---
+# --- EMBEDDED CSV DATASETS ---
 RUSSELL_1000_CSV = """rank,ticker,company,sector,weight,market_cap_usd
 1,NVDA,NVIDIA Corporation,Technology,13.31,5.47T
 2,AAPL,Apple Inc.,Technology,11.57,4.39T
@@ -690,77 +692,151 @@ ZBRA,Zebra Technologies,Electronic Equipment & Instruments
 ZBH,Zimmer Biomet,Health Care Equipment
 ZTS,Zoetis,Pharmaceuticals"""
 
+NASDAQ_100_CSV = """Ticker,Company,GICS Sector
+AAPL,Apple Inc.,Information Technology
+MSFT,Microsoft Corp.,Information Technology
+AMZN,Amazon.com Inc.,Consumer Discretionary
+NVDA,NVIDIA Corp.,Information Technology
+META,Meta Platforms Inc.,Communication Services
+GOOGL,Alphabet Inc. (Class A),Communication Services
+GOOG,Alphabet Inc. (Class C),Communication Services
+TSLA,Tesla Inc.,Consumer Discretionary
+AVGO,Broadcom Inc.,Information Technology
+COST,Costco Wholesale Corp.,Consumer Staples
+NFLX,Netflix Inc.,Communication Services
+AMD,Advanced Micro Devices Inc.,Information Technology
+TMUS,T-Mobile US Inc.,Communication Services
+LIN,Linde plc,Materials
+ISRG,Intuitive Surgical Inc.,Health Care
+QCOM,QUALCOMM Inc.,Information Technology
+AMGN,Amgen Inc.,Health Care
+HON,Honeywell International Inc.,Industrials
+BKNG,Booking Holdings Inc.,Consumer Discretionary
+TXN,Texas Instruments Inc.,Information Technology
+SBUX,Starbucks Corp.,Consumer Discretionary
+AMAT,Applied Materials Inc.,Information Technology
+GILD,Gilead Sciences Inc.,Health Care
+ADI,Analog Devices Inc.,Information Technology
+ADP,Automatic Data Processing Inc.,Information Technology
+MDLZ,Mondelez International Inc.,Consumer Staples
+LRCX,Lam Research Corp.,Information Technology
+VRTX,Vertex Pharmaceuticals Inc.,Health Care
+PANW,Palo Alto Networks Inc.,Information Technology
+ADI,Analog Devices Inc.,Information Technology
+SNPS,Synopsys Inc.,Information Technology
+CDNS,Cadence Design Systems Inc.,Information Technology
+MU,Micron Technology Inc.,Information Technology
+CSCO,Cisco Systems Inc.,Information Technology
+INTU,Intuit Inc.,Information Technology
+PYPL,PayPal Holdings Inc.,Financials
+ADBE,Adobe Inc.,Information Technology
+REGN,Regeneron Pharmaceuticals Inc.,Health Care
+MELI,MercadoLibre Inc.,Consumer Discretionary
+MNST,Monster Beverage Corp.,Consumer Staples"""
+
 
 # --- BUTTON 1: REFRESH CONSTITUENT LISTS ---
-if refresh_lists_btn or not st.session_state.constituent_lists:
+if refresh_lists_btn or not st.session_state.constituent_dataframes:
   with st.spinner("Loading embedded CSV constituent lists..."):
-    lists = {}
+    dfs = {}
     try:
-      df_r = pd.read_csv(io.StringIO(RUSSELL_1000_CSV))
-      lists["Russell 1000"] = (
-          df_r["ticker"]
-          .dropna()
-          .astype(str)
-          .str.replace(".", "-", regex=False)
-          .tolist()
-      )
+      dfs["Russell 1000"] = pd.read_csv(io.StringIO(RUSSELL_1000_CSV))
     except Exception as e:
       exceptions_log.append(f"Russell 1000 CSV Parse Error: {e}")
-      lists["Russell 1000"] = ["NVDA", "AAPL", "MSFT", "AMZN", "GOOGL"]
 
     try:
-      df_s = pd.read_csv(io.StringIO(SP500_CSV))
-      sym_col = next(
-          (
-              c
-              for c in df_s.columns
-              if "symbol" in c.lower() or "ticker" in c.lower()
-          ),
-          df_s.columns[0],
-      )
-      lists["S&P 500"] = (
-          df_s[sym_col]
-          .dropna()
-          .astype(str)
-          .str.replace(".", "-", regex=False)
-          .tolist()
-      )
+      dfs["S&P 500"] = pd.read_csv(io.StringIO(SP500_CSV))
     except Exception as e:
       exceptions_log.append(f"S&P 500 CSV Parse Error: {e}")
-      lists["S&P 500"] = ["MSFT", "AAPL", "NVDA", "AMZN", "GOOGL"]
 
-    st.session_state.constituent_lists = lists
+    try:
+      dfs["Nasdaq 100"] = pd.read_csv(io.StringIO(NASDAQ_100_CSV))
+    except Exception as e:
+      exceptions_log.append(f"Nasdaq 100 CSV Parse Error: {e}")
+
+    st.session_state.constituent_dataframes = dfs
     st.session_state.last_action = (
         "Constituent lists loaded successfully from embedded CSV datasets."
     )
     save_persistent_state({
-        "constituent_lists": lists,
+        "constituent_dataframes": dfs,
         "calculated_metrics": st.session_state.calculated_metrics,
     })
 
 
 # --- BUTTON 2: RELOAD DATA & RECALCULATE METRICS ---
 if reload_data_btn or st.session_state.calculated_metrics.empty:
-  if not st.session_state.constituent_lists:
+  if not st.session_state.constituent_dataframes:
     st.warning("Please refresh or load constituent lists first.")
   else:
     with st.spinner(
-        "Downloading price data, market caps, daily volumes, and computing"
+        "Filtering for >$10B market cap, downloading price data, and computing"
         " 12-1 / Volatility-adjusted rankings..."
     ):
       active_tickers = []
       ticker_index_map = {}
 
-      lists = st.session_state.constituent_lists
-      if show_russell and "Russell 1000" in lists:
-        for t in lists["Russell 1000"]:
-          active_tickers.append(t)
-          ticker_index_map[t] = "Russell 1000"
-      if show_sp500 and "S&P 500" in lists:
-        for t in lists["S&P 500"]:
+      dfs = st.session_state.constituent_dataframes
+
+      # Process Russell 1000
+      if show_russell and "Russell 1000" in dfs:
+        df_r = dfs["Russell 1000"]
+        for _, row in df_r.iterrows():
+          t = str(row["ticker"]).strip().replace(".", "-")
+          mcap_str = str(row.get("market_cap_usd", "0"))
+          # Parse market cap suffixes (T = Trillion, B = Billion, M = Million)
+          mcap_val = 0.0
+          try:
+            if "T" in mcap_str.upper():
+              mcap_val = float(mcap_str.upper().replace("T", "")) * 1e12
+            elif "B" in mcap_str.upper():
+              mcap_val = float(mcap_str.upper().replace("B", "")) * 1e9
+            elif "M" in mcap_str.upper():
+              mcap_val = float(mcap_str.upper().replace("M", "")) * 1e6
+            else:
+              mcap_val = float(mcap_str)
+          except Exception:
+            mcap_val = 15e9  # Default pass-through if unparsable
+
+          # Filter: > $10B Market Cap
+          if mcap_val >= 10e9:
+            if t not in active_tickers:
+              active_tickers.append(t)
+              ticker_index_map[t] = "Russell 1000"
+
+      # Process S&P 500 (Assume all S&P 500 stocks > $10B)
+      if show_sp500 and "S&P 500" in dfs:
+        df_s = dfs["S&P 500"]
+        sym_col = next(
+            (
+                c
+                for c in df_s.columns
+                if "symbol" in c.lower() or "ticker" in c.lower()
+            ),
+            df_s.columns[0],
+        )
+        for _, row in df_s.iterrows():
+          t = str(row[sym_col]).strip().replace(".", "-")
           if t not in active_tickers:
             active_tickers.append(t)
-          ticker_index_map[t] = "S&P 500"
+            ticker_index_map[t] = "S&P 500"
+
+      # Process Nasdaq 100 (Assume all Nasdaq 100 stocks > $10B)
+      if show_nasdaq and "Nasdaq 100" in dfs:
+        df_n = dfs["Nasdaq 100"]
+        sym_col = next(
+            (
+                c
+                for c in df_n.columns
+                if "symbol" in c.lower() or "ticker" in c.lower()
+            ),
+            df_n.columns[0],
+        )
+        for _, row in df_n.iterrows():
+          t = str(row[sym_col]).strip().replace(".", "-")
+          if t not in active_tickers:
+            active_tickers.append(t)
+            ticker_index_map[t] = "Nasdaq 100"
 
       active_tickers = sorted(list(set(active_tickers)))
 
@@ -815,16 +891,13 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
         )
 
         if len(series) > 252:
-          # 12-1 Return: Return from 252 days ago to 21 days ago
           price_12m_ago = series.iloc[-252]
           price_1m_ago = series.iloc[-21]
           ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
 
-          # Annualized Volatility (63-day standard deviation)
           vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
           vol_63 = vol_63 if vol_63 > 0 else 0.01
 
-          # Volatility-adjusted score (Sharpe-like momentum score)
           adj_score = ret_12_1 / vol_63
 
           avg_daily_vol = (
@@ -838,26 +911,25 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
           except Exception:
             pass
 
-          metrics_data.append({
-              "Ticker": ticker,
-              "Market Cap": mcap,
-              "Daily Volume": avg_daily_vol,
-              "12-1 Return (%)": ret_12_1 * 100.0,
-              "Volatility (%)": vol_63 * 100.0,
-              "Adj Score": adj_score,
-          })
+          # Double check live market cap > $10B if available, otherwise rely on csv filter
+          if mcap == 0 or mcap >= 10e9:
+            metrics_data.append({
+                "Ticker": ticker,
+                "Market Cap": mcap,
+                "Daily Volume": avg_daily_vol,
+                "12-1 Return (%)": ret_12_1 * 100.0,
+                "Volatility (%)": vol_63 * 100.0,
+                "Adj Score": adj_score,
+            })
 
       df_metrics = pd.DataFrame(metrics_data)
 
       if not df_metrics.empty:
-        # Calculate 12-1 Rank (descending by 12-1 Return)
         df_metrics["12-1 Rank"] = (
             df_metrics["12-1 Return (%)"]
             .rank(ascending=False, method="min")
             .astype(int)
         )
-
-        # Calculate Volatility-Adjusted Rank (descending by Adj Score)
         df_metrics["Adjusted Rank"] = (
             df_metrics["Adj Score"]
             .rank(ascending=False, method="min")
@@ -869,10 +941,11 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
 
       st.session_state.calculated_metrics = df_metrics
       st.session_state.last_action = (
-          "Price data reloaded and metrics recalculated successfully."
+          "Filtered for >$10B market cap, reloaded price data, and recalculated"
+          " metrics successfully."
       )
       save_persistent_state({
-          "constituent_lists": st.session_state.constituent_lists,
+          "constituent_dataframes": st.session_state.constituent_dataframes,
           "calculated_metrics": df_metrics,
       })
 
@@ -883,7 +956,7 @@ if exceptions_log:
       st.warning(ex)
 
 # --- DISPLAY DASHBOARD TABLE ---
-st.subheader("📊 Quantitative Momentum & Volatility Table")
+st.subheader("📊 Quantitative Momentum & Volatility Table ($10B+ Market Cap)")
 st.info(f"**Status:** {st.session_state.last_action}")
 
 df_display = st.session_state.calculated_metrics
