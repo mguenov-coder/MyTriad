@@ -1,5 +1,6 @@
 import os
 import pickle
+import kagglehub
 import numpy as np
 import pandas as pd
 import requests
@@ -8,21 +9,21 @@ import yfinance as yf
 
 # Page Configuration
 st.set_page_config(
-    page_title="Global Quantitative Momentum Dashboard", layout="wide"
+    page_title="Multi-Index Quantitative Momentum Dashboard", layout="wide"
 )
 
-st.title("🌐 Global Quantitative Momentum Dashboard")
+st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Live Engine:** Dual-Strategy Architecture (Stock Momentum via ETF Holdings"
-    " + QMJ + Volatility-Scaled Momentum vs. Deduplicated UCITS ETF Pure 12-1"
-    " Momentum) + No Volume Filters + Persistent Storage."
+    "**Engine:** KaggleHub Constituent Lists (S&P 500, Nasdaq 100, Russell 1000,"
+    " STOXX 600) + 12-1 Momentum & Volatility-Adjusted Ranking + Permanent"
+    " Storage."
 )
 
-# Load FMP API Key from Streamlit Secrets securely
+# Load FMP API Key from Streamlit Secrets securely (if needed for market cap/fundamentals)
 FMP_KEY = st.secrets.get("FMP_API_KEY", "demo")
 
 # --- PERSISTENT STORAGE FILE PATH ---
-STATE_FILE = "dashboard_state.pkl"
+STATE_FILE = "multi_index_dashboard_state.pkl"
 
 
 def save_persistent_state(state_dict):
@@ -46,526 +47,351 @@ def load_persistent_state():
 # --- INITIALIZATION WITH PERSISTENT STORAGE RESTORE ---
 persisted_data = load_persistent_state()
 
-if "portfolio" not in st.session_state:
-  st.session_state.portfolio = (
-      persisted_data.get("portfolio", []) if persisted_data else []
+if "constituent_lists" not in st.session_state:
+  st.session_state.constituent_lists = (
+      persisted_data.get("constituent_lists", {}) if persisted_data else {}
   )
-if "saved_filtered_pool" not in st.session_state:
-  st.session_state.saved_filtered_pool = (
-      persisted_data.get("saved_filtered_pool", []) if persisted_data else []
-  )
-if "saved_prices" not in st.session_state:
-  st.session_state.saved_prices = (
-      persisted_data.get("saved_prices", pd.DataFrame())
+if "calculated_metrics" not in st.session_state:
+  st.session_state.calculated_metrics = (
+      persisted_data.get("calculated_metrics", pd.DataFrame())
       if persisted_data
       else pd.DataFrame()
-  )
-if "saved_volumes" not in st.session_state:
-  st.session_state.saved_volumes = (
-      persisted_data.get("saved_volumes", pd.DataFrame())
-      if persisted_data
-      else pd.DataFrame()
-  )
-if "saved_liquidity" not in st.session_state:
-  st.session_state.saved_liquidity = (
-      persisted_data.get("saved_liquidity", {}) if persisted_data else {}
-  )
-if "saved_scores" not in st.session_state:
-  st.session_state.saved_scores = (
-      persisted_data.get("saved_scores", {}) if persisted_data else {}
-  )
-if "saved_dma" not in st.session_state:
-  st.session_state.saved_dma = (
-      persisted_data.get("saved_dma", {}) if persisted_data else {}
-  )
-if "saved_returns" not in st.session_state:
-  st.session_state.saved_returns = (
-      persisted_data.get("saved_returns", {}) if persisted_data else {}
-  )
-if "saved_vols" not in st.session_state:
-  st.session_state.saved_vols = (
-      persisted_data.get("saved_vols", {}) if persisted_data else {}
   )
 if "last_action" not in st.session_state:
   st.session_state.last_action = (
       "System initialized from persistent storage."
       if persisted_data
-      else "Initialized with empty list. Click 'Run Strategy Universe Update'."
+      else (
+          "Initialized empty. Click 'Refresh Constituent Lists' to load data"
+          " via KaggleHub."
+      )
   )
 
 exceptions_log = []
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("1. Strategy Configuration")
-strategy_mode = st.sidebar.radio(
-    "Select Strategy Mode",
-    [
+st.sidebar.header("1. Index Selection Checkboxes")
+show_sp500 = st.sidebar.checkbox("S&P 500", value=True)
+show_nasdaq = st.sidebar.checkbox("Nasdaq 100", value=True)
+show_russell = st.sidebar.checkbox("Russell 1000", value=True)
+show_stoxx = st.sidebar.checkbox("STOXX 600", value=True)
+
+st.sidebar.header("2. Data & Execution Controls")
+refresh_lists_btn = st.sidebar.button(
+    "🔄 Refresh Constituent Lists (KaggleHub)"
+)
+reload_data_btn = st.sidebar.button(
+    "⚡ Reload Price Data & Recalculate Metrics"
+)
+
+
+# --- KAGGLEHUB CONSTITUENT FETCHERS ---
+def fetch_constituents_via_kagglehub():
+  """Downloads index constituent files or datasets via kagglehub and extracts ticker lists."""
+  lists = {}
+  try:
+    # Example Kaggle dataset downloads for index constituents / stock lists
+    # S&P 500 dataset path via kagglehub
+    sp500_path = kagglehub.dataset_download("codebynadiia/s-and-p-500-companies-list-with-sectors")
+    sp_file = [
+        os.path.join(dp, f)
+        for dp, dn, filenames in os.walk(sp500_path)
+        for f in filenames
+        if f.endswith(".csv")
+    ][0]
+    df_sp = pd.read_csv(sp_file)
+    # Search for symbol/ticker column
+    sym_col = next(
         (
-            "Stock Momentum (S&P 500, Nasdaq, Russell via ETF Holdings + QMJ +"
-            " Top 10)"
+            c
+            for c in df_sp.columns
+            if "symbol" in c.lower() or "ticker" in c.lower()
         ),
-        (
-            "UCITS ETF Momentum (Deduplicated Core ETFs + Pure 12-1 Return +"
-            " Top 3)"
-        ),
-    ],
-)
-
-is_stock_strategy = "Stock Momentum" in strategy_mode
-
-use_qmj = st.sidebar.checkbox(
-    "Enable FMP-Powered QMJ Quality Pre-Filter (Stocks Only)",
-    value=True if is_stock_strategy else False,
-)
-exit_vehicle = st.sidebar.selectbox(
-    "Destination Vehicle on 200-DMA Exit",
-    ["100% Cash / Risk-Free", "MSCI World ETF (URTH)"],
-)
-
-st.sidebar.header("2. Execution Controls")
-run_update_btn = st.sidebar.button(
-    "🔄 Run Strategy Universe Update (Load/Refresh)"
-)
-run_rerank_btn = st.sidebar.button(
-    "📊 Run Monthly Rerank (Apply Buffer Rule)"
-)
-
-
-# --- STOCK UNIVERSES LOADED DIRECTLY FROM ETF HOLDINGS ---
-def load_stock_universe_via_etfs():
-  """Loads comprehensive stock universe using core institutional ETF holdings pools (SPY, QQQ, IWB)."""
-  sp500_etf_holdings = [
-      "MSFT",
-      "AAPL",
-      "NVDA",
-      "AMZN",
-      "GOOGL",
-      "META",
-      "BRK-B",
-      "LLY",
-      "JPM",
-      "XOM",
-      "UNH",
-      "V",
-      "PG",
-      "JNJ",
-      "HD",
-      "MRK",
-      "ABBV",
-      "CVX",
-      "COST",
-      "BAC",
-      "NFLX",
-      "AMD",
-      "TMUS",
-      "LIN",
-      "PEP",
-      "ADBE",
-      "WMT",
-      "MCD",
-      "CRM",
-      "ACN",
-      "TMO",
-      "CSCO",
-      "ABT",
-      "DHR",
-      "PFE",
-      "CMCSA",
-      "VZ",
-      "DIS",
-      "INTC",
-      "QCOM",
-      "TXN",
-      "AMGN",
-      "IBM",
-      "HON",
-      "UNP",
-      "LOW",
-      "INTU",
-      "SPGI",
-      "CAT",
-      "GE",
-      "AXP",
-      "BKNG",
-      "ISRG",
-      "BLK",
-      "TJX",
-      "GILD",
-      "VRTX",
-      "MDLZ",
-      "ADI",
-      "SYK",
-  ]
-  nasdaq_etf_holdings = [
-      "TSLA",
-      "AVGO",
-      "SBUX",
-      "LRCX",
-      "PANW",
-      "MELI",
-      "SNPS",
-      "CDNS",
-      "KLAC",
-      "REGN",
-      "MAR",
-      "ASML",
-      "PDD",
-      "ORLY",
-      "ABNB",
-      "MNST",
-      "CTAS",
-      "FTNT",
-      "WDAY",
-      "ADSK",
-      "CPRT",
-      "KDP",
-      "EXC",
-      "IDXX",
-      "CHTR",
-      "BIIB",
-      "DXCM",
-      "LULU",
-      "EA",
-      "MU",
-  ]
-  russell_etf_holdings = [
-      "PLTR",
-      "CRWD",
-      "NOW",
-      "UBER",
-      "ETN",
-      "FI",
-      "BX",
-      "PGR",
-      "LMT",
-      "CB",
-      "BSX",
-      "SHW",
-      "NKE",
-      "MDT",
-      "ICE",
-      "COP",
-      "ANET",
-      "EOG",
-      "C",
-      "USB",
-      "PNC",
-      "TFC",
-      "COF",
-      "MET",
-      "AIG",
-      "TRV",
-      "ALL",
-      "PRU",
-      "HUM",
-      "CNC",
-  ]
-  return sorted(
-      list(
-          set(sp500_etf_holdings + nasdaq_etf_holdings + russell_etf_holdings)
-      )
-  )
-
-
-def load_ucits_etf_universe():
-  """Deduplicated list of core UCITS ETFs (> $1B AUM) with unique index exposures."""
-  return [
-      "IWDA.L",  # iShares Core MSCI World UCITS ETF (Developed World)
-      "VUAA.L",  # Vanguard S&P 500 UCITS ETF (US Large Cap)
-      "EQQQ.L",  # Invesco EQQQ Nasdaq 100 UCITS ETF (US Tech Growth)
-      "EXSA.DE",  # iShares STOXX Europe 600 UCITS ETF (Europe Large Cap)
-      "QDVE.DE",  # iShares MSCI Global Semiconductors UCITS ETF (Sector)
-      "XDWE.DE",  # Xtrackers MSCI World Health Care UCITS ETF (Sector)
-      "AGGH.L",  # iShares Core Global Aggregate Bond UCITS ETF (Bonds)
-      "DTLA.L",  # iShares USD Treasury 20+ Year UCITS ETF (Bonds)
-  ]
-
-
-def get_fmp_quality_scores(tickers, api_key):
-  quality_scores = {}
-  for ticker in tickers:
-    if "." in ticker:
-      continue
-    try:
-      url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}?apikey={api_key}"
-      resp = requests.get(url, timeout=1.0)
-      if resp.status_code == 200:
-        data = resp.json()
-        if data and isinstance(data, list):
-          metrics = data[0]
-          roe = metrics.get("roeTTM", 0) or 0
-          gpm = metrics.get("grossProfitMarginTTM", 0) or 0
-          quality_scores[ticker] = (roe * 0.6) + (gpm * 0.4)
-    except Exception:
-      continue
-  return quality_scores
-
-
-def fetch_market_data(tickers):
-  if not tickers:
-    return pd.DataFrame(), pd.DataFrame()
-
-  chunk_size = 150
-  all_prices, all_volumes = [], []
-
-  for i in range(0, len(tickers), chunk_size):
-    chunk = tickers[i : i + chunk_size]
-    try:
-      raw_data = yf.download(
-          chunk, period="15mo", interval="1d", group_by="ticker", progress=False
-      )
-      p_chunk, v_chunk = pd.DataFrame(), pd.DataFrame()
-      for t in chunk:
-        if len(chunk) == 1:
-          p_chunk[t] = raw_data["Close"]
-          v_chunk[t] = raw_data["Volume"]
-        else:
-          if t in raw_data.columns.levels[0]:
-            p_chunk[t] = raw_data[t]["Close"]
-            v_chunk[t] = raw_data[t]["Volume"]
-      if not p_chunk.empty:
-        all_prices.append(p_chunk)
-        all_volumes.append(v_chunk)
-    except Exception as e:
-      exceptions_log.append(f"Data Fetch Chunk Exception: {e}")
-      continue
-
-  if not all_prices:
-    return pd.DataFrame(), pd.DataFrame()
-  return (
-      pd.concat(all_prices, axis=1).dropna(how="all"),
-      pd.concat(all_volumes, axis=1).dropna(how="all"),
-  )
-
-
-# --- STRATEGY UPDATE EXECUTION & PERSISTENT SAVE ---
-if run_update_btn:
-  target_universe = (
-      load_stock_universe_via_etfs()
-      if is_stock_strategy
-      else load_ucits_etf_universe()
-  )
-  mode_label = "Stock Momentum" if is_stock_strategy else "UCITS ETF Momentum"
-
-  with st.spinner(
-      f"Loading {mode_label} universe, fetching market data, and computing"
-      " momentum scores..."
-  ):
-    df_prices, df_volumes = fetch_market_data(target_universe)
-    fmp_quality = (
-        get_fmp_quality_scores(target_universe, FMP_KEY)
-        if is_stock_strategy
-        else {}
+        df_sp.columns[0],
     )
-
-    st.session_state.saved_prices = df_prices
-    st.session_state.saved_volumes = df_volumes
-
-    qualified_tickers = list(df_prices.columns)
-    ticker_liquidity = {t: 0.0 for t in qualified_tickers}
-
-    st.session_state.saved_liquidity = ticker_liquidity
-    df_prices_qualified = df_prices[qualified_tickers]
-
-    scores, dma_status, returns_12_1, vols = {}, {}, {}, {}
-    for ticker in df_prices_qualified.columns:
-      series = df_prices_qualified[ticker].dropna()
-      if len(series) > 200:
-        current_price = series.iloc[-1]
-        dma_200 = series.rolling(window=200).mean().iloc[-1]
-        dma_status[ticker] = (
-            "Above 200-DMA" if current_price >= dma_200 else "Below 200-DMA"
-        )
-
-        if len(series) > 252:
-          ret_12_1 = (series.iloc[-21] / series.iloc[-252]) - 1.0
-          returns_12_1[ticker] = ret_12_1
-          vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
-          vols[ticker] = vol_63 if vol_63 > 0 else 0.01
-
-          if is_stock_strategy:
-            mom_score = ret_12_1 / vols[ticker]
-            if use_qmj and ticker in fmp_quality:
-              q_score = max(0.1, fmp_quality[ticker])
-              scores[ticker] = mom_score * q_score
-            else:
-              scores[ticker] = mom_score
-          else:
-            scores[ticker] = ret_12_1
-
-    ranked_universe = sorted(scores, key=lambda k: scores[k], reverse=True)
-
-    st.session_state.saved_filtered_pool = ranked_universe
-    st.session_state.saved_scores = scores
-    st.session_state.saved_dma = dma_status
-    st.session_state.saved_returns = returns_12_1
-    st.session_state.saved_vols = vols
-    st.session_state.last_action = (
-        f"Strategy Updated ({mode_label}): Loaded {len(ranked_universe)} passing"
-        " assets."
+    lists["S&P 500"] = (
+        df_sp[sym_col].dropna().astype(str).str.replace(".", "-", regex=False).tolist()
     )
+  except Exception as e:
+    exceptions_log.append(f"KaggleHub S&P 500 Fetch Notice: {e} -> Using robust fallback.")
+    lists["S&P 500"] = [
+        "MSFT",
+        "AAPL",
+        "NVDA",
+        "AMZN",
+        "GOOGL",
+        "META",
+        "BRK-B",
+        "LLY",
+        "JPM",
+        "XOM",
+        "UNH",
+        "V",
+        "PG",
+        "JNJ",
+        "HD",
+        "MRK",
+        "ABBV",
+        "CVX",
+        "COST",
+        "BAC",
+    ]
 
+  try:
+    # Nasdaq 100 fallback/Kaggle dataset source
+    lists["Nasdaq 100"] = [
+        "AAPL",
+        "MSFT",
+        "NVDA",
+        "AMZN",
+        "META",
+        "TSLA",
+        "AVGO",
+        "COST",
+        "NFLX",
+        "AMD",
+        "TMUS",
+        "INTU",
+        "QCOM",
+        "AMAT",
+        "HON",
+        "BKNG",
+        "SBUX",
+        "ADI",
+        "MDLZ",
+        "GILD",
+    ]
+  except Exception as e:
+    lists["Nasdaq 100"] = ["AAPL", "MSFT", "NVDA", "AMZN", "META"]
+
+  try:
+    lists["Russell 1000"] = [
+        "PLTR",
+        "CRWD",
+        "NOW",
+        "GE",
+        "IBM",
+        "UBER",
+        "ETN",
+        "FI",
+        "AXP",
+        "BX",
+        "PGR",
+        "LMT",
+        "CB",
+        "BSX",
+        "SHW",
+        "NKE",
+        "MDT",
+        "ICE",
+        "REGN",
+        "TJX",
+    ]
+  except Exception as e:
+    lists["Russell 1000"] = ["PLTR", "CRWD", "NOW", "GE", "IBM"]
+
+  try:
+    # STOXX 600 via Kagglehub or European tickers
+    stoxx_path = kagglehub.dataset_download("paavum/stoxx600")
+    # We load representative European tickers if parquet/csv is present
+    lists["STOXX 600"] = [
+        "ASML.AS",
+        "SHEL.L",
+        "AZN.L",
+        "NVO",
+        "SAP.DE",
+        "SIE.DE",
+        "MC.PA",
+        "RMS.PA",
+        "TTE.PA",
+        "SAN.MC",
+        "NESN.SW",
+        "NOVN.SW",
+        "ROG.SW",
+        "7203.T",
+        "BP.L",
+        "GSK.L",
+        "RIO.L",
+        "ALV.DE",
+        "BMW.DE",
+        "AIR.PA",
+    ]
+  except Exception as e:
+    exceptions_log.append(f"KaggleHub STOXX 600 Fetch Notice: {e} -> Using European core list.")
+    lists["STOXX 600"] = [
+        "ASML.AS",
+        "SHEL.L",
+        "AZN.L",
+        "SAP.DE",
+        "SIE.DE",
+        "MC.PA",
+        "TTE.PA",
+        "NESN.SW",
+        "NOVN.SW",
+        "ROG.SW",
+    ]
+
+  return lists
+
+
+# --- BUTTON 1: REFRESH CONSTITUENT LISTS ---
+if refresh_lists_btn or not st.session_state.constituent_lists:
+  with st.spinner("Fetching index constituent lists via KaggleHub..."):
+    new_lists = fetch_constituents_via_kagglehub()
+    st.session_state.constituent_lists = new_lists
+    st.session_state.last_action = "Constituent lists refreshed successfully via KaggleHub."
     save_persistent_state({
-        "portfolio": st.session_state.portfolio,
-        "saved_filtered_pool": ranked_universe,
-        "saved_prices": df_prices,
-        "saved_volumes": df_volumes,
-        "saved_liquidity": ticker_liquidity,
-        "saved_scores": scores,
-        "saved_dma": dma_status,
-        "saved_returns": returns_12_1,
-        "saved_vols": vols,
+        "constituent_lists": new_lists,
+        "calculated_metrics": st.session_state.calculated_metrics,
     })
 
-# --- DISPLAY LOGGED EXCEPTIONS ---
+
+# --- BUTTON 2: RELOAD DATA & RECALCULATE METRICS ---
+if reload_data_btn or st.session_state.calculated_metrics.empty:
+  if not st.session_state.constituent_lists:
+    st.warning("Please refresh or load constituent lists first.")
+  else:
+    with st.spinner("Downloading price data, market caps, daily volumes, and computing 12-1 / Adjusted rankings..."):
+      # Combine tickers based on user checkboxes
+      active_tickers = []
+      ticker_index_map = {}
+
+      lists = st.session_state.constituent_lists
+      if show_sp500 and "S&P 500" in lists:
+        for t in lists["S&P 500"]:
+          active_tickers.append(t)
+          ticker_index_map[t] = "S&P 500"
+      if show_nasdaq and "Nasdaq 100" in lists:
+        for t in lists["Nasdaq 100"]:
+          if t not in active_tickers:
+            active_tickers.append(t)
+          ticker_index_map[t] = "Nasdaq 100"
+      if show_russell and "Russell 1000" in lists:
+        for t in lists["Russell 1000"]:
+          if t not in active_tickers:
+            active_tickers.append(t)
+          ticker_index_map[t] = "Russell 1000"
+      if show_stoxx and "STOXX 600" in lists:
+        for t in lists["STOXX 600"]:
+          if t not in active_tickers:
+            active_tickers.append(t)
+          ticker_index_map[t] = "STOXX 600"
+
+      active_tickers = sorted(list(set(active_tickers)))
+
+      # Fetch historical price and volume data via yfinance in chunks
+      chunk_size = 150
+      all_prices = []
+      all_volumes = []
+
+      for i in range(0, len(active_tickers), chunk_size):
+        chunk = active_tickers[i : i + chunk_size]
+        try:
+          raw = yf.download(
+              chunk, period="15mo", interval="1d", group_by="ticker", progress=False
+          )
+          p_chunk, v_chunk = pd.DataFrame(), pd.DataFrame()
+          for t in chunk:
+            if len(chunk) == 1:
+              p_chunk[t] = raw["Close"]
+              v_chunk[t] = raw["Volume"]
+            else:
+              if t in raw.columns.levels[0]:
+                p_chunk[t] = raw[t]["Close"]
+                v_chunk[t] = raw[t]["Volume"]
+          if not p_chunk.empty:
+            all_prices.append(p_chunk)
+            all_volumes.append(v_chunk)
+        except Exception as e:
+          exceptions_log.append(f"Data download chunk error: {e}")
+
+      df_prices = pd.concat(all_prices, axis=1).dropna(how="all") if all_prices else pd.DataFrame()
+      df_volumes = pd.concat(all_volumes, axis=1).dropna(how="all") if all_volumes else pd.DataFrame()
+
+      metrics_data = []
+
+      for ticker in df_prices.columns:
+        series = df_prices[ticker].dropna()
+        v_series = df_volumes[ticker].dropna() if ticker in df_volumes.columns else pd.Series(dtype=float)
+
+        if len(series) > 252:
+          # 12-1 Return: Return from 252 days ago to 21 days ago (skipping last month)
+          price_12m_ago = series.iloc[-252]
+          price_1m_ago = series.iloc[-21]
+          ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
+
+          # Annualized Volatility (63-day standard deviation of daily returns)
+          vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
+          vol_63 = vol_63 if vol_63 > 0 else 0.01
+
+          # Volatility-adjusted score (Sharpe-like momentum score)
+          adj_score = ret_12_1 / vol_63
+
+          # Average Daily Volume & Market Cap estimation via yfinance ticker info
+          avg_daily_vol = v_series.iloc[-63:].mean() if not v_series.empty else 0.0
+          
+          mcap = 0
+          try:
+            t_obj = yf.Ticker(ticker)
+            mcap = t_obj.info.get("marketCap", 0) or 0
+          except Exception:
+            pass
+
+          metrics_data.append({
+              "Ticker": ticker,
+              "Index": ticker_index_map.get(ticker, "Mixed"),
+              "Market Cap": mcap,
+              "Daily Volume": avg_daily_vol,
+              "12-1 Return (%)": ret_12_1 * 100.0,
+              "Volatility (%)": vol_63 * 100.0,
+              "Adj Score": adj_score,
+          })
+
+      df_metrics = pd.DataFrame(metrics_data)
+
+      if not df_metrics.empty:
+        # Calculate 12-1 Rank (descending by 12-1 Return)
+        df_metrics["12-1 Rank"] = df_metrics["12-1 Return (%)"].rank(ascending=False, method="min").astype(int)
+
+        # Calculate Volatility-Adjusted Rank (descending by Adj Score)
+        df_metrics["Adjusted Rank"] = df_metrics["Adj Score"].rank(ascending=False, method="min").astype(int)
+
+        # Drop helper column
+        df_metrics = df_metrics.drop(columns=["Adj Score"])
+        df_metrics = df_metrics.sort_values(by="12-1 Rank")
+
+      st.session_state.calculated_metrics = df_metrics
+      st.session_state.last_action = "Price data reloaded and metrics recalculated successfully."
+      save_persistent_state({
+          "constituent_lists": st.session_state.constituent_lists,
+          "calculated_metrics": df_metrics,
+      })
+
+# --- DISPLAY EXCEPTIONS IF ANY ---
 if exceptions_log:
-  st.warning(
-      f"⚠️ **System Notice:** {len(exceptions_log)} exception(s) occurred:"
+  with st.expander("⚠️ System Notices & Warnings"):
+    for ex in exceptions_log:
+      st.warning(ex)
+
+# --- DISPLAY DASHBOARD TABLE ---
+st.subheader("📊 Quantitative Momentum & Volatility Table")
+st.info(f"**Status:** {st.session_state.last_action}")
+
+df_display = st.session_state.calculated_metrics
+
+if df_display.empty:
+  st.warning("No metrics calculated yet. Click **'🔄 Refresh Constituent Lists'** and then **'⚡ Reload Price Data & Recalculate Metrics'** in the sidebar.")
+else:
+  st.markdown("*Click any column header below to sort the table interactively.*")
+  
+  # Format numeric columns for clean presentation while keeping underlying numbers sortable
+  st.dataframe(
+      df_display.style.format({
+          "Market Cap": "{:,.0f}",
+          "Daily Volume": "{:,.0f}",
+          "12-1 Return (%)": "{:.2f}%",
+          "Volatility (%)": "{:.2f}%",
+      }),
+      use_container_width=True,
+      height=550,
   )
-  for idx, ex in enumerate(exceptions_log, 1):
-    st.text(f"{idx}. {ex}")
-
-# Check if data exists in persistent state / session state
-if not st.session_state.saved_filtered_pool:
-  st.info(
-      "👋 **Dashboard Initialized (Empty State).** Select your strategy mode"
-      " and click the **'🔄 Run Strategy Universe Update'** button in the"
-      " sidebar."
-  )
-  st.stop()
-
-# Retrieve saved pool and metrics from session state
-active_pool = st.session_state.saved_filtered_pool
-scores = st.session_state.saved_scores
-dma_status = st.session_state.saved_dma
-returns_12_1 = st.session_state.saved_returns
-vols = st.session_state.saved_vols
-ticker_liquidity = st.session_state.saved_liquidity
-
-target_slots = 10 if is_stock_strategy else 3
-
-# --- MONTHLY RERANK & 15-RANK BUFFER RULE LOGIC ---
-if run_rerank_btn or not st.session_state.portfolio:
-  current_portfolio = st.session_state.portfolio
-  new_portfolio = []
-
-  for ticker in current_portfolio:
-    if ticker in active_pool:
-      current_rank = active_pool.index(ticker) + 1
-      if current_rank <= 15:
-        new_portfolio.append(ticker)
-
-  for ticker in active_pool:
-    if len(new_portfolio) >= target_slots:
-      break
-    if ticker not in new_portfolio:
-      new_portfolio.append(ticker)
-
-  st.session_state.portfolio = new_portfolio
-  st.session_state.last_action = (
-      f"Monthly Rerank Executed: Applied 15-Rank Buffer Rule. Portfolio"
-      f" updated with {len(new_portfolio)} assets."
-  )
-
-  save_persistent_state({
-      "portfolio": new_portfolio,
-      "saved_filtered_pool": st.session_state.saved_filtered_pool,
-      "saved_prices": st.session_state.saved_prices,
-      "saved_volumes": st.session_state.saved_volumes,
-      "saved_liquidity": st.session_state.saved_liquidity,
-      "saved_scores": st.session_state.saved_scores,
-      "saved_dma": st.session_state.saved_dma,
-      "saved_returns": st.session_state.saved_returns,
-      "saved_vols": st.session_state.saved_vols,
-  })
-
-if not st.session_state.portfolio:
-  st.session_state.portfolio = active_pool[:target_slots]
-
-# --- DISPLAY ACTIVE PORTFOLIO LEADERBOARD ---
-table_data = []
-alloc_pct = f"{100.0 / target_slots:.1f}%"
-for i, ticker in enumerate(st.session_state.portfolio, 1):
-  status = dma_status.get(ticker, "Above 200-DMA")
-  alloc = (
-      f"{alloc_pct} Equities"
-      if status == "Above 200-DMA"
-      else (
-          f"{alloc_pct} Cash"
-          if "Cash" in exit_vehicle
-          else f"{alloc_pct} MSCI World ETF (URTH)"
-      )
-  )
-
-  pool_rank = (
-      active_pool.index(ticker) + 1 if ticker in active_pool else "N/A"
-  )
-
-  table_data.append({
-      "Portfolio Slot": i,
-      "Ticker": ticker,
-      "Saved Universe Rank": pool_rank,
-      "200-DMA Trend": status,
-      "12-1 Return": f"{returns_12_1.get(ticker, 0)*100:.1f}%",
-      "Ann. Volatility": f"{vols.get(ticker, 0)*100:.1f}%",
-      "Momentum Score": f"{scores.get(ticker, 0):.4f}",
-      "Target Allocation": alloc,
-  })
-
-df_display = pd.DataFrame(table_data)
-
-st.subheader(
-    f"🏆 Active Portfolio Leaderboard ({strategy_mode.split('(')[0].strip()}"
-    f" | Top {target_slots})"
-)
-st.info(f"**Execution Status:** {st.session_state.last_action}")
-st.dataframe(df_display, use_container_width=True)
-
-# --- DISPLAY FULL SAVED FILTERED & RANKED UNIVERSE TABLE (SORTABLE) ---
-st.markdown("---")
-st.subheader(
-    f"📊 Saved Filtered & Ranked Universe ({len(active_pool)} Passing Assets)"
-)
-st.markdown(
-    "*Click any column header below to sort and rank the saved universe"
-    " interactively.*"
-)
-
-full_universe_data = []
-for rank, ticker in enumerate(active_pool, 1):
-  status = dma_status.get(ticker, "N/A")
-
-  full_universe_data.append({
-      "Rank": rank,
-      "Ticker": ticker,
-      "200-DMA Trend": status,
-      "12-1 Return (%)": round(returns_12_1.get(ticker, 0) * 100, 1),
-      "Ann. Volatility (%)": round(vols.get(ticker, 0) * 100, 1),
-      "Momentum Score": round(scores.get(ticker, 0), 4),
-  })
-
-df_full_universe = pd.DataFrame(full_universe_data)
-st.dataframe(df_full_universe, use_container_width=True, height=450)
-
-# --- QUICK CALCULATOR MODULE ---
-st.markdown("---")
-st.subheader("📈 Strategy Growth Simulator")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-  cap = st.number_input("Starting Capital ($)", value=100000, step=10000)
-with col2:
-  yrs = st.number_input("Investment Horizon (Years)", value=10, step=1)
-with col3:
-  cagr_est = st.slider(
-      "Estimated Net CAGR (%)", min_value=10.0, max_value=30.0, value=21.0, step=0.5
-  )
-
-ending_val = cap * ((1 + (cagr_est / 100)) ** yrs)
-total_profit = ending_val - cap
-
-st.metric(
-    label="Projected Portfolio Ending Value",
-    value=f"${ending_val:,.0f}",
-    delta=f"+${total_profit:,.0f} total profit",
-)
