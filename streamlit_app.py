@@ -15,7 +15,7 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **Dynamic Row-Position"
+    "**Engine:** Deduplicated Master List + **Dynamic Sidebar Sorting &"
     " Highlighting** + Progressive Batch Loading + **$15B+ Market Cap Filter** +"
     " **Daily Dollar Average** + **QMJ Filter Toggle** + Permanent Storage."
 )
@@ -79,7 +79,22 @@ show_nasdaq = st.sidebar.checkbox("Nasdaq 100", value=True)
 st.sidebar.header("2. Strategy & Filter Rules")
 use_qmj = st.sidebar.checkbox("Enable FMP QMJ / Quality Filter", value=True)
 
-st.sidebar.header("3. Execution Controls")
+st.sidebar.header("3. Table Sorting Controls")
+sort_column = st.sidebar.selectbox(
+    "Sort Table By",
+    options=[
+        "12-1 Return (%)",
+        "Volatility (%)",
+        "Market Cap",
+        "Daily Dollar Avg ($)",
+        "12-1 Rank",
+        "Ticker",
+    ],
+    index=0,
+)
+sort_ascending = st.sidebar.checkbox("Sort Ascending", value=False)
+
+st.sidebar.header("4. Execution Controls")
 refresh_lists_btn = st.sidebar.button(
     "🔄 Refresh Constituent Lists (Embedded Data)"
 )
@@ -1050,6 +1065,11 @@ else:
       df_display["Indices"].apply(match_index_filter)
   ].copy()
 
+  # Apply Sidebar Sorting
+  df_filtered = df_filtered.sort_values(
+      by=sort_column, ascending=sort_ascending
+  ).reset_index(drop=True)
+
   st.markdown(
       f"*Showing {len(df_filtered)} of {len(df_display)} deduplicated stocks.*"
   )
@@ -1067,7 +1087,7 @@ else:
   )
 
 
-  # Styling function tied strictly to visual row position (0-indexed order)
+  # Styling function tied strictly to current visual row position (0 to 19)
   def highlight_by_row_position(df):
     styles = []
     for pos in range(len(df)):
