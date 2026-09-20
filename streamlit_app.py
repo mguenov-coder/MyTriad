@@ -15,9 +15,9 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **Top 10 / 15 / 20 Row Highlighting**"
-    " + Progressive Batch Loading + **$15B+ Market Cap Filter** + **Daily"
-    " Dollar Average** + **QMJ Filter Toggle** + Permanent Storage."
+    "**Engine:** Deduplicated Master List + **Dynamic Sorting-Aware"
+    " Highlighting** + Progressive Batch Loading + **$15B+ Market Cap Filter** +"
+    " **Daily Dollar Average** + **QMJ Filter Toggle** + Permanent Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -757,28 +757,22 @@ def get_fmp_quality_scores(tickers, api_key):
   return quality_scores
 
 
-# --- STYLING FUNCTION FOR HIGHLIGHTING TOP RANKS ---
-def highlight_top_ranks(row):
-  rank = row.get("12-1 Rank", 999)
-  if rank <= 10:
-    return [
-        "background-color: rgba(46, 204, 113, 0.25)"
-    ] * len(  # Soft Emerald Green for Top 10
-        row
-    )
-  elif rank <= 15:
-    return [
-        "background-color: rgba(52, 152, 219, 0.2)"
-    ] * len(  # Soft Blue for Top 11-15
-        row
-    )
-  elif rank <= 20:
-    return [
-        "background-color: rgba(241, 196, 15, 0.2)"
-    ] * len(  # Soft Yellow for Top 16-20
-        row
-    )
-  return [""] * len(row)
+# --- STYLING FUNCTION BASED ON CURRENT RENDERED POSITION ---
+def highlight_top_ranks(df):
+  """Highlights rows based on their 12-1 Rank value regardless of interactive sorting order."""
+  styles = []
+  for idx, row in df.iterrows():
+    rank = row.get("12-1 Rank", 999)
+    if rank <= 10:
+      color = "background-color: rgba(46, 204, 113, 0.25)"  # Top 10: Soft Green
+    elif rank <= 15:
+      color = "background-color: rgba(52, 152, 219, 0.2)"  # Top 11-15: Soft Blue
+    elif rank <= 20:
+      color = "background-color: rgba(241, 196, 15, 0.2)"  # Top 16-20: Soft Yellow
+    else:
+      color = ""
+    styles.append([color] * len(row))
+  return pd.DataFrame(styles, index=df.index, columns=df.columns)
 
 
 # --- BUTTON 1: REFRESH CONSTITUENT LISTS ---
@@ -993,13 +987,13 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
         df_metrics = df_metrics.drop(columns=["Adj Score"])
         df_metrics = df_metrics.sort_values(by="12-1 Rank")
 
-        # Progressive display update in batches of max 25 with highlighting
+        # Progressive display update in batches of max 25
         status_text.text("Progressively rendering table in batches...")
         batch_size = 25
         for b_end in range(batch_size, len(df_metrics) + batch_size, batch_size):
           df_batch = df_metrics.iloc[:b_end]
           table_placeholder.dataframe(
-              df_batch.style.apply(highlight_top_ranks, axis=1).format({
+              df_batch.style.apply(highlight_top_ranks, axis=None).format({
                   "Market Cap": "{:,.0f}",
                   "Daily Dollar Avg ($)": "{:,.0f}",
                   "12-1 Return (%)": "{:.2f}%",
@@ -1076,7 +1070,7 @@ else:
   )
 
   st.dataframe(
-      df_filtered.style.apply(highlight_top_ranks, axis=1).format({
+      df_filtered.style.apply(highlight_top_ranks, axis=None).format({
           "Market Cap": "{:,.0f}",
           "Daily Dollar Avg ($)": "{:,.0f}",
           "12-1 Return (%)": "{:.2f}%",
