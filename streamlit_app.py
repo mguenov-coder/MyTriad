@@ -15,8 +15,8 @@ st.set_page_config(
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
     "**Engine:** Embedded CSV Lists (Russell 1000, S&P 500, Nasdaq 100) +"
-    " **$20B+ Market Cap Filter** + **Daily Dollar Average** + **QMJ Quality"
-    " Filter Toggle** + Permanent Storage."
+    " **$15B+ Market Cap Filter** + **Cascading Deduplication** + **Daily Dollar"
+    " Average** + **QMJ Quality Filter Toggle** + Permanent Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -76,9 +76,7 @@ show_sp500 = st.sidebar.checkbox("S&P 500", value=True)
 show_nasdaq = st.sidebar.checkbox("Nasdaq 100", value=True)
 
 st.sidebar.header("2. Strategy & Filter Rules")
-use_qmj = st.sidebar.checkbox(
-    "Enable FMP QMJ / Quality Filter", value=True
-)  # QMJ/JVM toggle
+use_qmj = st.sidebar.checkbox("Enable FMP QMJ / Quality Filter", value=True)
 
 st.sidebar.header("3. Execution Controls")
 refresh_lists_btn = st.sidebar.button(
@@ -727,7 +725,6 @@ MDLZ,Mondelez International Inc.,Consumer Staples
 LRCX,Lam Research Corp.,Information Technology
 VRTX,Vertex Pharmaceuticals Inc.,Health Care
 PANW,Palo Alto Networks Inc.,Information Technology
-ADI,Analog Devices Inc.,Information Technology
 SNPS,Synopsys Inc.,Information Technology
 CDNS,Cadence Design Systems Inc.,Information Technology
 MU,Micron Technology Inc.,Information Technology
@@ -788,23 +785,165 @@ if refresh_lists_btn or not st.session_state.constituent_dataframes:
     })
 
 
-# --- BUTTON 2: RELOAD DATA & RECALCULATE METRICS ---
+# --- BUTTON 2: RELOAD DATA & RECALCULATE METRICS WITH CASCADING DEDUPLICATION ---
 if reload_data_btn or st.session_state.calculated_metrics.empty:
   if not st.session_state.constituent_dataframes:
     st.warning("Please refresh or load constituent lists first.")
   else:
     with st.spinner(
-        "Filtering for >$20B market cap, downloading price/volume data, and"
-        " computing rankings..."
+        "Filtering for >$15B market cap and processing data with cascading"
+        " deduplication..."
     ):
-      active_tickers = []
-      ticker_index_map = {}
-
       dfs = st.session_state.constituent_dataframes
+      calculated_cache = {}  # Store metrics by ticker as we process them
 
-      # Process Russell 1000 (> $20B Market Cap Filter)
+      # Helper function to process a batch of tickers via yfinance
+      def fetch_and_compute(tickers_to_fetch, fmp_quality_map):
+        if not tickers_to_fetch:
+          return
+
+        chunk_size = 150
+        all_prices, all_volumes = [], []
+
+        for i in range(0, len(tickers_to_fetch), chunk_size):
+          chunk = tickers_to_fetch[i : i + chunk_size]
+          try:
+            raw = yf.download(
+                chunk,
+                period="15mo",
+                interval="1d",
+                group_by="ticker",
+                progress=False,
+            )
+            p_chunk, v_chunk = pd.DataFrame(), pd.DataFrame()
+            for t in chunk:
+              if len(chunk) == 1:
+                p_chunk[t] = raw["Close"]
+                v_chunk[t] = raw["Volume"]
+              else:
+                if t in raw.columns.levels[0]:
+                  p_chunk[t] = raw[t]["Close"]
+                  v_chunk[t] = raw[t]["Volume"]
+            if not p_chunk.empty:
+              all_prices.append(p_chunk)
+              all_volumes.append(v_chunk)
+          except Exception as e:
+            exceptions_log.append(f"Data download chunk error: {e}")
+
+        df_prices = (
+            pd.concat(all_prices, axis=1).dropna(how="all")
+            if all_prices
+            else pd.DataFrame()
+        )
+        df_volumes = (
+            pd.concat(all_volumes, axis=1).dropna(how="all")
+            if all_volumes
+            else pd.DataFrame()
+        )
+
+        for ticker in df_prices.columns:
+          series = df_prices[ticker].dropna()
+          v_series = (
+              df_volumes[ticker].dropna()
+              if ticker in df_volumes.columns
+              else pd.Series(dtype=float)
+          )
+
+          if len(series) > 252:
+            price_12m_ago = series.iloc[-252]
+            price_1m_ago = series.iloc[-21]
+            ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
+
+            vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
+            vol_63 = vol_63 if vol_63 > 0 else 0.01
+
+            common_idx = series.index.intersection(v_series.index)
+            if len(common_idx) > 0:
+              dollar_vol_series = (
+                  series.loc[common_idx] * v_series.loc[common_idx]
+              )
+              avg_daily_dollar_vol = (
+                  dollar_vol_series.iloc[-63:].mean()
+                  if len(dollar_vol_series) >= 63
+                  else dollar_vol_series.mean()
+              )
+            else:
+              avg_daily_dollar_vol = 0.0
+
+            mom_score = ret_12_1 / vol_63
+            if use_qmj and ticker in fmp_quality_map:
+              q_score = max(0.1, fmp_quality_map[ticker])
+              adj_score = mom_score * q_score
+            else:
+              adj_score = mom_score
+
+            mcap = 0
+            try:
+              t_obj = yf.Ticker(ticker)
+              mcap = t_obj.info.get("marketCap", 0) or 0
+            except Exception:
+              pass
+
+            if mcap == 0 or mcap >= 15e9:
+              calculated_cache[ticker] = {
+                  "Ticker": ticker,
+                  "Market Cap": mcap,
+                  "Daily Dollar Avg ($)": avg_daily_dollar_vol,
+                  "12-1 Return (%)": ret_12_1 * 100.0,
+                  "Volatility (%)": vol_63 * 100.0,
+                  "Adj Score": adj_score,
+              }
+
+      # Pre-fetch quality scores if QMJ is enabled for all potential unique tickers
+      all_potential_tickers = []
+      if show_russell and "Russell 1000" in dfs:
+        all_potential_tickers.extend(
+            [
+                str(r["ticker"]).strip().replace(".", "-")
+                for _, r in dfs["Russell 1000"].iterrows()
+            ]
+        )
+      if show_sp500 and "S&P 500" in dfs:
+        sym_c = next(
+            (
+                c
+                for c in dfs["S&P 500"].columns
+                if "symbol" in c.lower() or "ticker" in c.lower()
+            ),
+            dfs["S&P 500"].columns[0],
+        )
+        all_potential_tickers.extend(
+            [
+                str(r[sym_c]).strip().replace(".", "-")
+                for _, r in dfs["S&P 500"].iterrows()
+            ]
+        )
+      if show_nasdaq and "Nasdaq 100" in dfs:
+        sym_c = next(
+            (
+                c
+                for c in dfs["Nasdaq 100"].columns
+                if "symbol" in c.lower() or "ticker" in c.lower()
+            ),
+            dfs["Nasdaq 100"].columns[0],
+        )
+        all_potential_tickers.extend(
+            [
+                str(r[sym_c]).strip().replace(".", "-")
+                for _, r in dfs["Nasdaq 100"].iterrows()
+            ]
+        )
+      all_potential_tickers = list(set(all_potential_tickers))
+      fmp_quality = (
+          get_fmp_quality_scores(all_potential_tickers, FMP_KEY)
+          if use_qmj
+          else {}
+      )
+
+      # --- STEP 1: RUSSELL 1000 ---
       if show_russell and "Russell 1000" in dfs:
         df_r = dfs["Russell 1000"]
+        r_to_fetch = []
         for _, row in df_r.iterrows():
           t = str(row["ticker"]).strip().replace(".", "-")
           mcap_str = str(row.get("market_cap_usd", "0"))
@@ -819,14 +958,14 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             else:
               mcap_val = float(mcap_str)
           except Exception:
-            mcap_val = 25e9
+            mcap_val = 20e9
 
-          if mcap_val >= 20e9:
-            if t not in active_tickers:
-              active_tickers.append(t)
-              ticker_index_map[t] = "Russell 1000"
+          if mcap_val >= 15e9:
+            if t not in calculated_cache:
+              r_to_fetch.append(t)
+        fetch_and_compute(r_to_fetch, fmp_quality)
 
-      # Process S&P 500
+      # --- STEP 2: S&P 500 (Skip already calculated) ---
       if show_sp500 and "S&P 500" in dfs:
         df_s = dfs["S&P 500"]
         sym_col = next(
@@ -837,13 +976,14 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             ),
             df_s.columns[0],
         )
+        s_to_fetch = []
         for _, row in df_s.iterrows():
           t = str(row[sym_col]).strip().replace(".", "-")
-          if t not in active_tickers:
-            active_tickers.append(t)
-            ticker_index_map[t] = "S&P 500"
+          if t not in calculated_cache:
+            s_to_fetch.append(t)
+        fetch_and_compute(s_to_fetch, fmp_quality)
 
-      # Process Nasdaq 100
+      # --- STEP 3: NASDAQ 100 (Skip already calculated) ---
       if show_nasdaq and "Nasdaq 100" in dfs:
         df_n = dfs["Nasdaq 100"]
         sym_col = next(
@@ -854,111 +994,15 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             ),
             df_n.columns[0],
         )
+        n_to_fetch = []
         for _, row in df_n.iterrows():
           t = str(row[sym_col]).strip().replace(".", "-")
-          if t not in active_tickers:
-            active_tickers.append(t)
-            ticker_index_map[t] = "Nasdaq 100"
+          if t not in calculated_cache:
+            n_to_fetch.append(t)
+        fetch_and_compute(n_to_fetch, fmp_quality)
 
-      active_tickers = sorted(list(set(active_tickers)))
-
-      chunk_size = 150
-      all_prices, all_volumes = [], []
-
-      for i in range(0, len(active_tickers), chunk_size):
-        chunk = active_tickers[i : i + chunk_size]
-        try:
-          raw = yf.download(
-              chunk,
-              period="15mo",
-              interval="1d",
-              group_by="ticker",
-              progress=False,
-          )
-          p_chunk, v_chunk = pd.DataFrame(), pd.DataFrame()
-          for t in chunk:
-            if len(chunk) == 1:
-              p_chunk[t] = raw["Close"]
-              v_chunk[t] = raw["Volume"]
-            else:
-              if t in raw.columns.levels[0]:
-                p_chunk[t] = raw[t]["Close"]
-                v_chunk[t] = raw[t]["Volume"]
-          if not p_chunk.empty:
-            all_prices.append(p_chunk)
-            all_volumes.append(v_chunk)
-        except Exception as e:
-          exceptions_log.append(f"Data download chunk error: {e}")
-
-      df_prices = (
-          pd.concat(all_prices, axis=1).dropna(how="all")
-          if all_prices
-          else pd.DataFrame()
-      )
-      df_volumes = (
-          pd.concat(all_volumes, axis=1).dropna(how="all")
-          if all_volumes
-          else pd.DataFrame()
-      )
-
-      fmp_quality = (
-          get_fmp_quality_scores(active_tickers, FMP_KEY) if use_qmj else {}
-      )
-      metrics_data = []
-
-      for ticker in df_prices.columns:
-        series = df_prices[ticker].dropna()
-        v_series = (
-            df_volumes[ticker].dropna()
-            if ticker in df_volumes.columns
-            else pd.Series(dtype=float)
-        )
-
-        if len(series) > 252:
-          price_12m_ago = series.iloc[-252]
-          price_1m_ago = series.iloc[-21]
-          ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
-
-          vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
-          vol_63 = vol_63 if vol_63 > 0 else 0.01
-
-          # Daily Dollar Average (Price * Volume) over last 63 sessions
-          common_idx = series.index.intersection(v_series.index)
-          if len(common_idx) > 0:
-            dollar_vol_series = series.loc[common_idx] * v_series.loc[common_idx]
-            avg_daily_dollar_vol = (
-                dollar_vol_series.iloc[-63:].mean()
-                if len(dollar_vol_series) >= 63
-                else dollar_vol_series.mean()
-            )
-          else:
-            avg_daily_dollar_vol = 0.0
-
-          mom_score = ret_12_1 / vol_63
-          if use_qmj and ticker in fmp_quality:
-            q_score = max(0.1, fmp_quality[ticker])
-            adj_score = mom_score * q_score
-          else:
-            adj_score = mom_score
-
-          mcap = 0
-          try:
-            t_obj = yf.Ticker(ticker)
-            mcap = t_obj.info.get("marketCap", 0) or 0
-          except Exception:
-            pass
-
-          # Enforce $20B+ market cap filter
-          if mcap == 0 or mcap >= 20e9:
-            metrics_data.append({
-                "Ticker": ticker,
-                "Market Cap": mcap,
-                "Daily Dollar Avg ($)": avg_daily_dollar_vol,
-                "12-1 Return (%)": ret_12_1 * 100.0,
-                "Volatility (%)": vol_63 * 100.0,
-                "Adj Score": adj_score,
-            })
-
+      # Compile results into DataFrame
+      metrics_data = list(calculated_cache.values())
       df_metrics = pd.DataFrame(metrics_data)
 
       if not df_metrics.empty:
@@ -978,8 +1022,8 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
 
       st.session_state.calculated_metrics = df_metrics
       st.session_state.last_action = (
-          "Filtered for >$20B market cap, reloaded price data, and recalculated"
-          " metrics successfully."
+          "Cascading deduplicated processing completed successfully (>=$15B"
+          " market cap)."
       )
       save_persistent_state({
           "constituent_dataframes": st.session_state.constituent_dataframes,
@@ -993,7 +1037,7 @@ if exceptions_log:
       st.warning(ex)
 
 # --- DISPLAY DASHBOARD TABLE ---
-st.subheader("📊 Quantitative Momentum & Volatility Table ($20B+ Market Cap)")
+st.subheader("📊 Quantitative Momentum & Volatility Table ($15B+ Market Cap)")
 st.info(f"**Status:** {st.session_state.last_action}")
 
 df_display = st.session_state.calculated_metrics
