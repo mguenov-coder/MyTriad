@@ -15,7 +15,7 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **Dynamic View-Position"
+    "**Engine:** Deduplicated Master List + **Dynamic Row-Position"
     " Highlighting** + Progressive Batch Loading + **$15B+ Market Cap Filter** +"
     " **Daily Dollar Average** + **QMJ Filter Toggle** + Permanent Storage."
 )
@@ -702,7 +702,7 @@ MSFT,Microsoft Corp.,Information Technology
 AMZN,Amazon.com Inc.,Consumer Discretionary
 NVDA,NVIDIA Corp.,Information Technology
 META,Meta Platforms Inc.,Communication Services
-GOOGL,Alphabet Inc. (Class A),CommunicationServices
+GOOGL,Alphabet Inc. (Class A),Communication Services
 GOOG,Alphabet Inc. (Class C),Communication Services
 TSLA,Tesla Inc.,Consumer Discretionary
 AVGO,Broadcom Inc.,Information Technology
@@ -975,24 +975,22 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
         for b_end in range(batch_size, len(df_metrics) + batch_size, batch_size):
           df_batch = df_metrics.iloc[:b_end]
 
-          # Helper function for batch rendering highlight by 12-1 Rank
-          def highlight_batch(df):
+          def highlight_by_row_position(df):
             styles = []
-            for _, r in df.iterrows():
-              rk = r.get("12-1 Rank", 999)
-              if rk <= 10:
-                c = "background-color: rgba(46, 204, 113, 0.25)"
-              elif rk <= 15:
-                c = "background-color: rgba(52, 152, 219, 0.2)"
-              elif rk <= 20:
-                c = "background-color: rgba(241, 196, 15, 0.2)"
+            for pos in range(len(df)):
+              if pos < 10:
+                c = "background-color: rgba(46, 204, 113, 0.25)"  # Top 1-10: Green
+              elif pos < 15:
+                c = "background-color: rgba(52, 152, 219, 0.2)"  # Top 11-15: Blue
+              elif pos < 20:
+                c = "background-color: rgba(241, 196, 15, 0.2)"  # Top 16-20: Yellow
               else:
                 c = ""
-              styles.append([c] * len(r))
+              styles.append([c] * len(df.columns))
             return pd.DataFrame(styles, index=df.index, columns=df.columns)
 
           table_placeholder.dataframe(
-              df_batch.style.apply(highlight_batch, axis=None).format({
+              df_batch.style.apply(highlight_by_row_position, axis=None).format({
                   "Market Cap": "{:,.0f}",
                   "Daily Dollar Avg ($)": "{:,.0f}",
                   "12-1 Return (%)": "{:.2f}%",
@@ -1069,25 +1067,24 @@ else:
   )
 
 
-  # Styling function tied to absolute 12-1 Rank so highlights follow the core metric
-  def highlight_by_rank(df):
+  # Styling function tied strictly to visual row position (0-indexed order)
+  def highlight_by_row_position(df):
     styles = []
-    for _, row in df.iterrows():
-      rank = row.get("12-1 Rank", 999)
-      if rank <= 10:
-        color = "background-color: rgba(46, 204, 113, 0.25)"  # Top 10: Soft Green
-      elif rank <= 15:
-        color = "background-color: rgba(52, 152, 219, 0.2)"  # Top 11-15: Soft Blue
-      elif rank <= 20:
-        color = "background-color: rgba(241, 196, 15, 0.2)"  # Top 16-20: Soft Yellow
+    for pos in range(len(df)):
+      if pos < 10:
+        color = "background-color: rgba(46, 204, 113, 0.25)"  # Rows 0-9: Green
+      elif pos < 15:
+        color = "background-color: rgba(52, 152, 219, 0.2)"  # Rows 10-14: Blue
+      elif pos < 20:
+        color = "background-color: rgba(241, 196, 15, 0.2)"  # Rows 15-19: Yellow
       else:
         color = ""
-      styles.append([color] * len(row))
+      styles.append([color] * len(df.columns))
     return pd.DataFrame(styles, index=df.index, columns=df.columns)
 
 
   st.dataframe(
-      df_filtered.style.apply(highlight_by_rank, axis=None).format({
+      df_filtered.style.apply(highlight_by_row_position, axis=None).format({
           "Market Cap": "{:,.0f}",
           "Daily Dollar Avg ($)": "{:,.0f}",
           "12-1 Return (%)": "{:.2f}%",
