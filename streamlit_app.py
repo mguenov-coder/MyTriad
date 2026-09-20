@@ -15,9 +15,9 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **Dynamic Sidebar Sorting &"
-    " Highlighting** + Progressive Batch Loading + **$15B+ Market Cap Filter** +"
-    " **Daily Dollar Average** + **QMJ Filter Toggle** + Permanent Storage."
+    "**Engine:** Deduplicated Master List + **Adjusted Rank Sort Option** +"
+    " Progressive Batch Loading + **$15B+ Market Cap Filter** + **Daily Dollar"
+    " Average** + **QMJ Filter Toggle** + Permanent Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -84,6 +84,7 @@ sort_column = st.sidebar.selectbox(
     "Sort Table By",
     options=[
         "12-1 Return (%)",
+        "Adjusted Rank",
         "Volatility (%)",
         "Market Cap",
         "Daily Dollar Avg ($)",
