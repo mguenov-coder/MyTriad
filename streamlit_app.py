@@ -757,9 +757,14 @@ def get_fmp_quality_scores(tickers, api_key):
   return quality_scores
 
 
-# --- STYLING FUNCTION BASED ON CURRENT RENDERED POSITION ---
+# --- STYLING FUNCTION BASED ON 12-1 RANK ---
 def highlight_top_ranks(df):
-  """Highlights rows based on their 12-1 Rank value regardless of interactive sorting order."""
+  """Highlights rows based on their absolute 12-1 Rank value.
+
+  This ensures that when a user sorts by any column, the exact top 10, 11-15,
+  and 16-20 momentum stocks remain highlighted regardless of their sorted
+  position on screen, cleanly unhighlighting previous items.
+  """
   styles = []
   for idx, row in df.iterrows():
     rank = row.get("12-1 Rank", 999)
