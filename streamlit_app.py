@@ -15,7 +15,7 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **Dynamic Sorting-Aware"
+    "**Engine:** Deduplicated Master List + **Dynamic View-Position"
     " Highlighting** + Progressive Batch Loading + **$15B+ Market Cap Filter** +"
     " **Daily Dollar Average** + **QMJ Filter Toggle** + Permanent Storage."
 )
@@ -702,7 +702,7 @@ MSFT,Microsoft Corp.,Information Technology
 AMZN,Amazon.com Inc.,Consumer Discretionary
 NVDA,NVIDIA Corp.,Information Technology
 META,Meta Platforms Inc.,Communication Services
-GOOGL,Alphabet Inc. (Class A),Communication Services
+GOOGL,Alphabet Inc. (Class A),CommunicationServices
 GOOG,Alphabet Inc. (Class C),Communication Services
 TSLA,Tesla Inc.,Consumer Discretionary
 AVGO,Broadcom Inc.,Information Technology
@@ -755,29 +755,6 @@ def get_fmp_quality_scores(tickers, api_key):
     except Exception:
       continue
   return quality_scores
-
-
-# --- STYLING FUNCTION BASED ON 12-1 RANK ---
-def highlight_top_ranks(df):
-  """Highlights rows based on their absolute 12-1 Rank value.
-
-  This ensures that when a user sorts by any column, the exact top 10, 11-15,
-  and 16-20 momentum stocks remain highlighted regardless of their sorted
-  position on screen, cleanly unhighlighting previous items.
-  """
-  styles = []
-  for idx, row in df.iterrows():
-    rank = row.get("12-1 Rank", 999)
-    if rank <= 10:
-      color = "background-color: rgba(46, 204, 113, 0.25)"  # Top 10: Soft Green
-    elif rank <= 15:
-      color = "background-color: rgba(52, 152, 219, 0.2)"  # Top 11-15: Soft Blue
-    elif rank <= 20:
-      color = "background-color: rgba(241, 196, 15, 0.2)"  # Top 16-20: Soft Yellow
-    else:
-      color = ""
-    styles.append([color] * len(row))
-  return pd.DataFrame(styles, index=df.index, columns=df.columns)
 
 
 # --- BUTTON 1: REFRESH CONSTITUENT LISTS ---
@@ -997,8 +974,25 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
         batch_size = 25
         for b_end in range(batch_size, len(df_metrics) + batch_size, batch_size):
           df_batch = df_metrics.iloc[:b_end]
+
+          # Helper function for batch rendering highlight by 12-1 Rank
+          def highlight_batch(df):
+            styles = []
+            for _, r in df.iterrows():
+              rk = r.get("12-1 Rank", 999)
+              if rk <= 10:
+                c = "background-color: rgba(46, 204, 113, 0.25)"
+              elif rk <= 15:
+                c = "background-color: rgba(52, 152, 219, 0.2)"
+              elif rk <= 20:
+                c = "background-color: rgba(241, 196, 15, 0.2)"
+              else:
+                c = ""
+              styles.append([c] * len(r))
+            return pd.DataFrame(styles, index=df.index, columns=df.columns)
+
           table_placeholder.dataframe(
-              df_batch.style.apply(highlight_top_ranks, axis=None).format({
+              df_batch.style.apply(highlight_batch, axis=None).format({
                   "Market Cap": "{:,.0f}",
                   "Daily Dollar Avg ($)": "{:,.0f}",
                   "12-1 Return (%)": "{:.2f}%",
@@ -1074,8 +1068,26 @@ else:
       "🟨 **Top 16–20 Rows** (Yellow Highlight)", unsafe_allow_html=True
   )
 
+
+  # Styling function tied to absolute 12-1 Rank so highlights follow the core metric
+  def highlight_by_rank(df):
+    styles = []
+    for _, row in df.iterrows():
+      rank = row.get("12-1 Rank", 999)
+      if rank <= 10:
+        color = "background-color: rgba(46, 204, 113, 0.25)"  # Top 10: Soft Green
+      elif rank <= 15:
+        color = "background-color: rgba(52, 152, 219, 0.2)"  # Top 11-15: Soft Blue
+      elif rank <= 20:
+        color = "background-color: rgba(241, 196, 15, 0.2)"  # Top 16-20: Soft Yellow
+      else:
+        color = ""
+      styles.append([color] * len(row))
+    return pd.DataFrame(styles, index=df.index, columns=df.columns)
+
+
   st.dataframe(
-      df_filtered.style.apply(highlight_top_ranks, axis=None).format({
+      df_filtered.style.apply(highlight_by_rank, axis=None).format({
           "Market Cap": "{:,.0f}",
           "Daily Dollar Avg ($)": "{:,.0f}",
           "12-1 Return (%)": "{:.2f}%",
