@@ -15,9 +15,9 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **Adjusted Rank Sort Option** +"
-    " Progressive Batch Loading + **$15B+ Market Cap Filter** + **Daily Dollar"
-    " Average** + **QMJ Filter Toggle** + Permanent Storage."
+    "**Engine:** Deduplicated Master List + **Combined Rank (12-1 + Adjusted)"
+    " Sort Option** + Progressive Batch Loading + **$15B+ Market Cap Filter** +"
+    " **Daily Dollar Average** + **QMJ Filter Toggle** + Permanent Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -83,6 +83,7 @@ st.sidebar.header("3. Table Sorting Controls")
 sort_column = st.sidebar.selectbox(
     "Sort Table By",
     options=[
+        "Combined Rank",
         "12-1 Return (%)",
         "Adjusted Rank",
         "Volatility (%)",
@@ -93,7 +94,9 @@ sort_column = st.sidebar.selectbox(
     ],
     index=0,
 )
-sort_ascending = st.sidebar.checkbox("Sort Ascending", value=False)
+sort_ascending = st.sidebar.checkbox(
+    "Sort Ascending", value=True
+)  # Default True for ranks where lower is better
 
 st.sidebar.header("4. Execution Controls")
 refresh_lists_btn = st.sidebar.button(
@@ -982,8 +985,13 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             .rank(ascending=False, method="min")
             .astype(int)
         )
+        # Compute Combined Rank as sum of 12-1 Rank and Adjusted Rank
+        df_metrics["Combined Rank"] = (
+            df_metrics["12-1 Rank"] + df_metrics["Adjusted Rank"]
+        )
+
         df_metrics = df_metrics.drop(columns=["Adj Score"])
-        df_metrics = df_metrics.sort_values(by="12-1 Rank")
+        df_metrics = df_metrics.sort_values(by="Combined Rank")
 
         # Progressive display update in batches of max 25
         status_text.text("Progressively rendering table in batches...")
