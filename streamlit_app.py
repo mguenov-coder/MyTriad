@@ -16,9 +16,8 @@ st.set_page_config(
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
     "**Engine:** Deduplicated Master List + **Combined Rank Column** + Dynamic"
-    " Sorting & Highlighting + Progressive Batch Loading + **$15B+ Market Cap"
-    " Filter** + **Daily Dollar Average** + **QMJ Filter Toggle** + Permanent"
-    " Storage."
+    " Sorting & Highlighting + Progressive Batch Loading + **Robust Data"
+    " Pipeline**."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -32,7 +31,7 @@ def save_persistent_state(state_dict):
   try:
     with open(STATE_FILE, "wb") as f:
       pickle.dump(state_dict, f)
-  except Exception as e:
+  except Exception:
     pass
 
 
@@ -41,7 +40,7 @@ def load_persistent_state():
     try:
       with open(STATE_FILE, "rb") as f:
         return pickle.load(f)
-    except Exception as e:
+    except Exception:
       return None
   return None
 
@@ -95,9 +94,7 @@ sort_column = st.sidebar.selectbox(
     ],
     index=0,
 )
-sort_ascending = st.sidebar.checkbox(
-    "Sort Ascending", value=True
-)  # Default True for ranks where lower is better
+sort_ascending = st.sidebar.checkbox("Sort Ascending", value=True)
 
 st.sidebar.header("4. Execution Controls")
 refresh_lists_btn = st.sidebar.button(
@@ -764,7 +761,7 @@ def get_fmp_quality_scores(tickers, api_key):
     clean_t = ticker.replace("-", ".")
     try:
       url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{clean_t}?apikey={api_key}"
-      resp = requests.get(url, timeout=1.0)
+      resp = requests.get(url, timeout=1.5)
       if resp.status_code == 200:
         data = resp.json()
         if data and isinstance(data, list):
@@ -816,11 +813,12 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
     status_text = st.empty()
 
     status_text.text(
-        "Building unified master list and applying $15B+ market cap filter..."
+        "Building unified master list and applying market cap filter..."
     )
 
     dfs = st.session_state.constituent_dataframes
     ticker_to_indices = {}
+    ticker_to_mcap = {}
 
     # 1. Russell 1000
     if show_russell and "Russell 1000" in dfs:
@@ -828,7 +826,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
       for _, row in df_r.iterrows():
         t = str(row["ticker"]).strip().replace(".", "-")
         mcap_str = str(row.get("market_cap_usd", "0"))
-        mcap_val = 0.0
+        mcap_val = 20e9  # default large cap assumption
         try:
           if "T" in mcap_str.upper():
             mcap_val = float(mcap_str.upper().replace("T", "")) * 1e12
@@ -839,10 +837,11 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
           else:
             mcap_val = float(mcap_str)
         except Exception:
-          mcap_val = 20e9
+          pass
 
         if mcap_val >= 15e9:
           ticker_to_indices.setdefault(t, set()).add("Russell 1000")
+          ticker_to_mcap[t] = mcap_val
 
     # 2. S&P 500
     if show_sp500 and "S&P 500" in dfs:
@@ -858,6 +857,8 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
       for _, row in df_s.iterrows():
         t = str(row[sym_col]).strip().replace(".", "-")
         ticker_to_indices.setdefault(t, set()).add("S&P 500")
+        if t not in ticker_to_mcap:
+          ticker_to_mcap[t] = 50e9  # Default large cap for S&P 500
 
     # 3. Nasdaq 100
     if show_nasdaq and "Nasdaq 100" in dfs:
@@ -873,6 +874,8 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
       for _, row in df_n.iterrows():
         t = str(row[sym_col]).strip().replace(".", "-")
         ticker_to_indices.setdefault(t, set()).add("Nasdaq 100")
+        if t not in ticker_to_mcap:
+          ticker_to_mcap[t] = 50e9  # Default large cap for Nasdaq 100
 
     active_tickers = sorted(list(ticker_to_indices.keys()))
     total_tickers = len(active_tickers)
@@ -888,7 +891,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
       )
 
       calculated_metrics_list = []
-      chunk_size = 150
+      chunk_size = 100
 
       for i in range(0, total_tickers, chunk_size):
         chunk = active_tickers[i : i + chunk_size]
@@ -900,77 +903,85 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
 
         try:
           raw = yf.download(
-              chunk,
-              period="15mo",
-              interval="1d",
-              group_by="ticker",
-              progress=False,
+              chunk, period="15mo", interval="1d", progress=False
           )
-          p_chunk, v_chunk = pd.DataFrame(), pd.DataFrame()
-          for t in chunk:
-            if len(chunk) == 1:
-              p_chunk[t] = raw["Close"]
-              v_chunk[t] = raw["Volume"]
-            else:
-              if t in raw.columns.levels[0]:
-                p_chunk[t] = raw[t]["Close"]
-                v_chunk[t] = raw[t]["Volume"]
+          if raw.empty:
+            continue
 
-          if not p_chunk.empty:
-            for ticker in p_chunk.columns:
-              series = p_chunk[ticker].dropna()
-              v_series = (
-                  v_chunk[ticker].dropna()
-                  if ticker in v_chunk.columns
-                  else pd.Series(dtype=float)
-              )
+          # Safe extraction of Close and Volume across yfinance versions
+          if isinstance(raw.columns, pd.MultiIndex):
+            close_df = (
+                raw["Close"] if "Close" in raw.columns.levels[0] else pd.DataFrame()
+            )
+            vol_df = (
+                raw["Volume"] if "Volume" in raw.columns.levels[0] else pd.DataFrame()
+            )
+          else:
+            # Single ticker fallback
+            close_df = (
+                pd.DataFrame({chunk[0]: raw["Close"]})
+                if "Close" in raw.columns
+                else pd.DataFrame()
+            )
+            vol_df = (
+                pd.DataFrame({chunk[0]: raw["Volume"]})
+                if "Volume" in raw.columns
+                else pd.DataFrame()
+            )
 
-              if len(series) > 252:
-                price_12m_ago = series.iloc[-252]
-                price_1m_ago = series.iloc[-21]
-                ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
+          if close_df.empty:
+            continue
 
-                vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
-                vol_63 = vol_63 if vol_63 > 0 else 0.01
+          for ticker in close_df.columns:
+            if ticker not in chunk:
+              continue
+            series = close_df[ticker].dropna()
+            v_series = (
+                vol_df[ticker].dropna()
+                if not vol_df.empty and ticker in vol_df.columns
+                else pd.Series(dtype=float)
+            )
 
-                common_idx = series.index.intersection(v_series.index)
-                if len(common_idx) > 0:
-                  dollar_vol_series = (
-                      series.loc[common_idx] * v_series.loc[common_idx]
-                  )
-                  avg_daily_dollar_vol = (
-                      dollar_vol_series.iloc[-63:].mean()
-                      if len(dollar_vol_series) >= 63
-                      else dollar_vol_series.mean()
-                  )
-                else:
-                  avg_daily_dollar_vol = 0.0
+            if len(series) > 252:
+              price_12m_ago = series.iloc[-252]
+              price_1m_ago = series.iloc[-21]
+              ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
 
-                mom_score = ret_12_1 / vol_63
-                if use_qmj and ticker in fmp_quality:
-                  q_score = max(0.1, fmp_quality[ticker])
-                  adj_score = mom_score * q_score
-                else:
-                  adj_score = mom_score
+              vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
+              vol_63 = vol_63 if vol_63 > 0 else 0.01
 
-                mcap = 0
-                try:
-                  t_obj = yf.Ticker(ticker)
-                  mcap = t_obj.info.get("marketCap", 0) or 0
-                except Exception:
-                  pass
+              common_idx = series.index.intersection(v_series.index)
+              if len(common_idx) > 0:
+                dollar_vol_series = (
+                    series.loc[common_idx] * v_series.loc[common_idx]
+                )
+                avg_daily_dollar_vol = (
+                    dollar_vol_series.iloc[-63:].mean()
+                    if len(dollar_vol_series) >= 63
+                    else dollar_vol_series.mean()
+                )
+              else:
+                avg_daily_dollar_vol = 0.0
 
-                if mcap == 0 or mcap >= 15e9:
-                  indices_str = ", ".join(sorted(list(ticker_to_indices[ticker])))
-                  calculated_metrics_list.append({
-                      "Ticker": ticker,
-                      "Indices": indices_str,
-                      "Market Cap": mcap,
-                      "Daily Dollar Avg ($)": avg_daily_dollar_vol,
-                      "12-1 Return (%)": ret_12_1 * 100.0,
-                      "Volatility (%)": vol_63 * 100.0,
-                      "Adj Score": adj_score,
-                  })
+              mom_score = ret_12_1 / vol_63
+              if use_qmj and ticker in fmp_quality:
+                q_score = max(0.1, fmp_quality[ticker])
+                adj_score = mom_score * q_score
+              else:
+                adj_score = mom_score
+
+              mcap = ticker_to_mcap.get(ticker, 20e9)
+
+              indices_str = ", ".join(sorted(list(ticker_to_indices[ticker])))
+              calculated_metrics_list.append({
+                  "Ticker": ticker,
+                  "Indices": indices_str,
+                  "Market Cap": mcap,
+                  "Daily Dollar Avg ($)": avg_daily_dollar_vol,
+                  "12-1 Return (%)": ret_12_1 * 100.0,
+                  "Volatility (%)": vol_63 * 100.0,
+                  "Adj Score": adj_score,
+              })
         except Exception as e:
           exceptions_log.append(f"Data download chunk error: {e}")
 
@@ -986,7 +997,6 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             .rank(ascending=False, method="min")
             .astype(int)
         )
-        # Compute Combined Rank as sum of 12-1 Rank and Adjusted Rank
         df_metrics["Combined Rank"] = (
             df_metrics["12-1 Rank"] + df_metrics["Adjusted Rank"]
         )
@@ -994,7 +1004,6 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
         df_metrics = df_metrics.drop(columns=["Adj Score"])
         df_metrics = df_metrics.sort_values(by="Combined Rank")
 
-        # Progressive display update in batches of max 25
         status_text.text("Progressively rendering table in batches...")
         batch_size = 25
         for b_end in range(batch_size, len(df_metrics) + batch_size, batch_size):
@@ -1004,11 +1013,11 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             styles = []
             for pos in range(len(df)):
               if pos < 10:
-                c = "background-color: rgba(46, 204, 113, 0.25)"  # Top 1-10: Green
+                c = "background-color: rgba(46, 204, 113, 0.25)"
               elif pos < 15:
-                c = "background-color: rgba(52, 152, 219, 0.2)"  # Top 11-15: Blue
+                c = "background-color: rgba(52, 152, 219, 0.2)"
               elif pos < 20:
-                c = "background-color: rgba(241, 196, 15, 0.2)"  # Top 16-20: Yellow
+                c = "background-color: rgba(241, 196, 15, 0.2)"
               else:
                 c = ""
               styles.append([c] * len(df.columns))
@@ -1056,7 +1065,6 @@ if df_display.empty:
       " then **'⚡ Reload Price Data & Recalculate Metrics'** in the sidebar."
   )
 else:
-  # Index Filter Multi-select
   all_index_options = ["Russell 1000", "S&P 500", "Nasdaq 100"]
   selected_index_filter = st.multiselect(
       "Filter Displayed Table by Index Membership",
@@ -1075,7 +1083,6 @@ else:
       df_display["Indices"].apply(match_index_filter)
   ].copy()
 
-  # Apply Sidebar Sorting
   df_filtered = df_filtered.sort_values(
       by=sort_column, ascending=sort_ascending
   ).reset_index(drop=True)
@@ -1084,7 +1091,6 @@ else:
       f"*Showing {len(df_filtered)} of {len(df_display)} deduplicated stocks.*"
   )
 
-  # Color Highlight Legend
   cols_legend = st.columns(3)
   cols_legend[0].markdown(
       "🟩 **Top 1–10 Rows** (Green Highlight)", unsafe_allow_html=True
@@ -1097,16 +1103,15 @@ else:
   )
 
 
-  # Styling function tied strictly to current visual row position (0 to 19)
   def highlight_by_row_position(df):
     styles = []
     for pos in range(len(df)):
       if pos < 10:
-        color = "background-color: rgba(46, 204, 113, 0.25)"  # Rows 0-9: Green
+        color = "background-color: rgba(46, 204, 113, 0.25)"
       elif pos < 15:
-        color = "background-color: rgba(52, 152, 219, 0.2)"  # Rows 10-14: Blue
+        color = "background-color: rgba(52, 152, 219, 0.2)"
       elif pos < 20:
-        color = "background-color: rgba(241, 196, 15, 0.2)"  # Rows 15-19: Yellow
+        color = "background-color: rgba(241, 196, 15, 0.2)"
       else:
         color = ""
       styles.append([color] * len(df.columns))
