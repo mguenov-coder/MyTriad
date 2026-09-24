@@ -15,9 +15,8 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **Combined Rank Column** + Dynamic"
-    " Sorting & Highlighting + Progressive Batch Loading + **Robust Data"
-    " Pipeline**."
+    "**Engine:** Deduplicated Master List + **Combined Rank Column** + Safe"
+    " Dynamic Sorting & Highlighting + Progressive Batch Loading."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -826,7 +825,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
       for _, row in df_r.iterrows():
         t = str(row["ticker"]).strip().replace(".", "-")
         mcap_str = str(row.get("market_cap_usd", "0"))
-        mcap_val = 20e9  # default large cap assumption
+        mcap_val = 20e9
         try:
           if "T" in mcap_str.upper():
             mcap_val = float(mcap_str.upper().replace("T", "")) * 1e12
@@ -858,7 +857,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
         t = str(row[sym_col]).strip().replace(".", "-")
         ticker_to_indices.setdefault(t, set()).add("S&P 500")
         if t not in ticker_to_mcap:
-          ticker_to_mcap[t] = 50e9  # Default large cap for S&P 500
+          ticker_to_mcap[t] = 50e9
 
     # 3. Nasdaq 100
     if show_nasdaq and "Nasdaq 100" in dfs:
@@ -875,7 +874,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
         t = str(row[sym_col]).strip().replace(".", "-")
         ticker_to_indices.setdefault(t, set()).add("Nasdaq 100")
         if t not in ticker_to_mcap:
-          ticker_to_mcap[t] = 50e9  # Default large cap for Nasdaq 100
+          ticker_to_mcap[t] = 50e9
 
     active_tickers = sorted(list(ticker_to_indices.keys()))
     total_tickers = len(active_tickers)
@@ -908,7 +907,6 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
           if raw.empty:
             continue
 
-          # Safe extraction of Close and Volume across yfinance versions
           if isinstance(raw.columns, pd.MultiIndex):
             close_df = (
                 raw["Close"] if "Close" in raw.columns.levels[0] else pd.DataFrame()
@@ -917,7 +915,6 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
                 raw["Volume"] if "Volume" in raw.columns.levels[0] else pd.DataFrame()
             )
           else:
-            # Single ticker fallback
             close_df = (
                 pd.DataFrame({chunk[0]: raw["Close"]})
                 if "Close" in raw.columns
@@ -1083,9 +1080,15 @@ else:
       df_display["Indices"].apply(match_index_filter)
   ].copy()
 
-  df_filtered = df_filtered.sort_values(
-      by=sort_column, ascending=sort_ascending
-  ).reset_index(drop=True)
+  # SAFE GUARD: Ensure sort_column exists in columns before sorting to avoid KeyError
+  if sort_column in df_filtered.columns:
+    df_filtered = df_filtered.sort_values(
+        by=sort_column, ascending=sort_ascending
+    ).reset_index(drop=True)
+  else:
+    df_filtered = df_filtered.sort_values(
+        by="Combined Rank", ascending=True
+    ).reset_index(drop=True)
 
   st.markdown(
       f"*Showing {len(df_filtered)} of {len(df_display)} deduplicated stocks.*"
