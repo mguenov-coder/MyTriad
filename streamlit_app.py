@@ -15,9 +15,10 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **Combined Rank (12-1 + Adjusted)"
-    " Sort Option** + Progressive Batch Loading + **$15B+ Market Cap Filter** +"
-    " **Daily Dollar Average** + **QMJ Filter Toggle** + Permanent Storage."
+    "**Engine:** Deduplicated Master List + **Combined Rank Column** + Dynamic"
+    " Sorting & Highlighting + Progressive Batch Loading + **$15B+ Market Cap"
+    " Filter** + **Daily Dollar Average** + **QMJ Filter Toggle** + Permanent"
+    " Storage."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
