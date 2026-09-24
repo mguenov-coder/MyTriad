@@ -16,7 +16,7 @@ st.set_page_config(
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
     "**Engine:** Deduplicated Master List + **Combined Rank Column** + Safe"
-    " Dynamic Sorting & Highlighting + Progressive Batch Loading."
+    " Schema Repair & Dynamic Highlighting."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -44,19 +44,38 @@ def load_persistent_state():
   return None
 
 
-# --- INITIALIZATION WITH PERSISTENT STORAGE RESTORE ---
+# --- INITIALIZATION WITH PERSISTENT STORAGE RESTORE & SCHEMA REPAIR ---
 persisted_data = load_persistent_state()
 
 if "constituent_dataframes" not in st.session_state:
   st.session_state.constituent_dataframes = (
       persisted_data.get("constituent_dataframes", {}) if persisted_data else {}
   )
+
 if "calculated_metrics" not in st.session_state:
-  st.session_state.calculated_metrics = (
+  saved_metrics = (
       persisted_data.get("calculated_metrics", pd.DataFrame())
       if persisted_data
       else pd.DataFrame()
   )
+  # Ensure all expected columns exist even if loading from an older saved state
+  if not saved_metrics.empty:
+    if "12-1 Rank" not in saved_metrics.columns and "12-1 Return (%)" in saved_metrics.columns:
+      saved_metrics["12-1 Rank"] = (
+          saved_metrics["12-1 Return (%)"]
+          .rank(ascending=False, method="min")
+          .astype(int)
+      )
+    if "Adjusted Rank" not in saved_metrics.columns:
+      saved_metrics["Adjusted Rank"] = saved_metrics.get(
+          "12-1 Rank", pd.Series([1] * len(saved_metrics))
+      )
+    if "Combined Rank" not in saved_metrics.columns:
+      saved_metrics["Combined Rank"] = (
+          saved_metrics["12-1 Rank"] + saved_metrics["Adjusted Rank"]
+      )
+  st.session_state.calculated_metrics = saved_metrics
+
 if "last_action" not in st.session_state:
   st.session_state.last_action = (
       "System initialized from persistent storage."
@@ -1080,7 +1099,7 @@ else:
       df_display["Indices"].apply(match_index_filter)
   ].copy()
 
-  # SAFE GUARD: Ensure sort_column exists in columns before sorting to avoid KeyError
+  # SAFE GUARD: Ensure sort_column exists in columns before sorting
   if sort_column in df_filtered.columns:
     df_filtered = df_filtered.sort_values(
         by=sort_column, ascending=sort_ascending
