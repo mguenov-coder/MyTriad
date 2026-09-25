@@ -15,8 +15,8 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **6-1 Ranking & Combined Rank** +"
-    " Safe Schema Repair & Dynamic Highlighting."
+    "**Engine:** Deduplicated Master List + **6-1 Return & Ranking** + Combined"
+    " Rank + Safe Schema Repair & Dynamic Highlighting."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
