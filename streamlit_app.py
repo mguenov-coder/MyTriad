@@ -15,8 +15,8 @@ st.set_page_config(
 
 st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **Combined Rank Column** + Safe"
-    " Schema Repair & Dynamic Highlighting."
+    "**Engine:** Deduplicated Master List + **6-1 Ranking & Combined Rank** +"
+    " Safe Schema Repair & Dynamic Highlighting."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -58,21 +58,39 @@ if "calculated_metrics" not in st.session_state:
       if persisted_data
       else pd.DataFrame()
   )
-  # Ensure all expected columns exist even if loading from an older saved state
   if not saved_metrics.empty:
-    if "12-1 Rank" not in saved_metrics.columns and "12-1 Return (%)" in saved_metrics.columns:
+    if (
+        "12-1 Rank" not in saved_metrics.columns
+        and "12-1 Return (%)" in saved_metrics.columns
+    ):
       saved_metrics["12-1 Rank"] = (
           saved_metrics["12-1 Return (%)"]
           .rank(ascending=False, method="min")
           .astype(int)
       )
+    if (
+        "6-1 Rank" not in saved_metrics.columns
+        and "6-1 Return (%)" in saved_metrics.columns
+    ):
+      saved_metrics["6-1 Rank"] = (
+          saved_metrics["6-1 Return (%)"]
+          .rank(ascending=False, method="min")
+          .astype(int)
+      )
+    else:
+      if "6-1 Rank" not in saved_metrics.columns:
+        saved_metrics["6-1 Rank"] = saved_metrics.get(
+            "12-1 Rank", pd.Series([1] * len(saved_metrics))
+        )
     if "Adjusted Rank" not in saved_metrics.columns:
       saved_metrics["Adjusted Rank"] = saved_metrics.get(
           "12-1 Rank", pd.Series([1] * len(saved_metrics))
       )
     if "Combined Rank" not in saved_metrics.columns:
       saved_metrics["Combined Rank"] = (
-          saved_metrics["12-1 Rank"] + saved_metrics["Adjusted Rank"]
+          saved_metrics["12-1 Rank"]
+          + saved_metrics["6-1 Rank"]
+          + saved_metrics["Adjusted Rank"]
       )
   st.session_state.calculated_metrics = saved_metrics
 
@@ -103,11 +121,13 @@ sort_column = st.sidebar.selectbox(
     options=[
         "Combined Rank",
         "12-1 Return (%)",
+        "6-1 Return (%)",
         "Adjusted Rank",
+        "12-1 Rank",
+        "6-1 Rank",
         "Volatility (%)",
         "Market Cap",
         "Daily Dollar Avg ($)",
-        "12-1 Rank",
         "Ticker",
     ],
     index=0,
@@ -960,8 +980,13 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
 
             if len(series) > 252:
               price_12m_ago = series.iloc[-252]
+              price_6m_ago = (
+                  series.iloc[-126] if len(series) >= 126 else series.iloc[0]
+              )
               price_1m_ago = series.iloc[-21]
+
               ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
+              ret_6_1 = (price_1m_ago / price_6m_ago) - 1.0
 
               vol_63 = series.iloc[-63:].pct_change().std() * np.sqrt(252)
               vol_63 = vol_63 if vol_63 > 0 else 0.01
@@ -995,6 +1020,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
                   "Market Cap": mcap,
                   "Daily Dollar Avg ($)": avg_daily_dollar_vol,
                   "12-1 Return (%)": ret_12_1 * 100.0,
+                  "6-1 Return (%)": ret_6_1 * 100.0,
                   "Volatility (%)": vol_63 * 100.0,
                   "Adj Score": adj_score,
               })
@@ -1008,13 +1034,20 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             .rank(ascending=False, method="min")
             .astype(int)
         )
+        df_metrics["6-1 Rank"] = (
+            df_metrics["6-1 Return (%)"]
+            .rank(ascending=False, method="min")
+            .astype(int)
+        )
         df_metrics["Adjusted Rank"] = (
             df_metrics["Adj Score"]
             .rank(ascending=False, method="min")
             .astype(int)
         )
         df_metrics["Combined Rank"] = (
-            df_metrics["12-1 Rank"] + df_metrics["Adjusted Rank"]
+            df_metrics["12-1 Rank"]
+            + df_metrics["6-1 Rank"]
+            + df_metrics["Adjusted Rank"]
         )
 
         df_metrics = df_metrics.drop(columns=["Adj Score"])
@@ -1044,6 +1077,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
                   "Market Cap": "{:,.0f}",
                   "Daily Dollar Avg ($)": "{:,.0f}",
                   "12-1 Return (%)": "{:.2f}%",
+                  "6-1 Return (%)": "{:.2f}%",
                   "Volatility (%)": "{:.2f}%",
               }),
               use_container_width=True,
@@ -1099,7 +1133,6 @@ else:
       df_display["Indices"].apply(match_index_filter)
   ].copy()
 
-  # SAFE GUARD: Ensure sort_column exists in columns before sorting
   if sort_column in df_filtered.columns:
     df_filtered = df_filtered.sort_values(
         by=sort_column, ascending=sort_ascending
@@ -1145,6 +1178,7 @@ else:
           "Market Cap": "{:,.0f}",
           "Daily Dollar Avg ($)": "{:,.0f}",
           "12-1 Return (%)": "{:.2f}%",
+          "6-1 Return (%)": "{:.2f}%",
           "Volatility (%)": "{:.2f}%",
       }),
       use_container_width=True,
