@@ -17,7 +17,7 @@ st.set_page_config(
 st.title("🌐 Quantitative Momentum Dashboard (Stocks & UCITS ETFs)")
 st.markdown(
     "**Engine:** Toggle between **Equities** and **UCITS ETFs** (All 7 ETFs with"
-    " automated European exchange resolution)."
+    " correct ETF exchange routing)."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -92,10 +92,7 @@ if asset_mode == "Equities (Stocks)":
   use_qmj = st.sidebar.checkbox("Enable FMP QMJ / Quality Filter", value=True)
 else:
   st.sidebar.header("2. ETF Basket Setup")
-  st.sidebar.info(
-      "Basket: SMH, CIBR, DFNS, QDVE, SXRV, UBUT, GOAI\n(Auto-resolved via"
-      " European/US exchanges)"
-  )
+  st.sidebar.info("Basket: SMH, CIBR, DFNS, QDVE, SXRV, UBUT, GOAI")
 
 st.sidebar.header("Sorting Controls")
 sort_column = st.sidebar.selectbox(
@@ -1026,45 +1023,38 @@ if reload_data_btn or (
         })
 
   else:
-    # UCITS ETFs Mode (Robust multi-exchange suffix search engine)
+    # UCITS ETFs Mode (Explicit exchange routing mapping for all 7 ETFs)
     status_text.text(
-        "Downloading price data for all 7 UCITS ETFs across global/European"
+        "Downloading price data for all 7 UCITS ETFs across European & global"
         " exchanges..."
     )
-    etf_input_symbols = ["SMH", "CIBR", "DFNS", "QDVE", "SXRV", "UBUT", "GOAI"]
+
+    # Clean mapping dictionary mapping user labels to their valid yfinance exchange symbols
+    etf_routing = {
+        "SMH": ["SMH", "SMH.L", "SMH.DE"],
+        "CIBR": ["CIBR", "CIBR.L"],
+        "DFNS": ["DFNS.L", "DFNS", "DFNS.DE"],
+        "QDVE": ["QDVE.DE", "QDVE.MI", "QDVE"],
+        "SXRV": ["SXRV.DE", "SXRV.MI"],
+        "UBUT": ["UBUT.DE", "UBUT.L"],
+        "GOAI": ["GOAI.DE", "GOAI.L"],
+    }
+
     etf_metrics_list = []
 
-    # Map possible international exchange extensions for Yahoo Finance resolution
-    suffixes = [
-        "",
-        ".DE",
-        ".AS",
-        ".PA",
-        ".MI",
-        ".L",
-        ".SW",
-        ".BE",
-        ".DU",
-        ".HM",
-        ".MU",
-        ".SG",
-    ]
-
-    for idx, base_ticker in enumerate(etf_input_symbols):
-      progress_bar.progress((idx + 1) / len(etf_input_symbols))
+    for idx, (display_ticker, candidate_symbols) in enumerate(
+        etf_routing.items()
+    ):
+      progress_bar.progress((idx + 1) / len(etf_routing))
       status_text.text(
-          f"Resolving ETF {base_ticker} ({idx+1}/{len(etf_input_symbols)})..."
+          f"Fetching data for ETF {display_ticker}"
+          f" ({idx+1}/{len(etf_routing)})..."
       )
 
       series = pd.Series(dtype=float)
-      resolved_ticker = base_ticker
-
-      for suffix in suffixes:
-        test_sym = base_ticker + suffix
+      for sym in candidate_symbols:
         try:
-          raw = yf.download(
-              test_sym, period="15mo", interval="1d", progress=False
-          )
+          raw = yf.download(sym, period="15mo", interval="1d", progress=False)
           if not raw.empty:
             s = (
                 raw["Close"]
@@ -1074,9 +1064,8 @@ if reload_data_btn or (
             if isinstance(s, pd.DataFrame):
               s = s.iloc[:, 0]
             s = s.dropna()
-            if len(s) > 100:  # Valid historical price series found
+            if len(s) > 100:
               series = s
-              resolved_ticker = base_ticker  # Keep original clean display name
               break
         except Exception:
           continue
@@ -1092,13 +1081,13 @@ if reload_data_btn or (
         ret_6_1 = (price_1m_ago / price_6m_ago) - 1.0
 
         etf_metrics_list.append({
-            "Ticker": resolved_ticker,
+            "Ticker": display_ticker,
             "12-1 Return (%)": ret_12_1 * 100.0,
             "6-1 Return (%)": ret_6_1 * 100.0,
         })
       else:
         exceptions_log.append(
-            f"Could not resolve sufficient price history for ETF: {base_ticker}"
+            f"Could not retrieve price history for UCITS ETF: {display_ticker}"
         )
 
     df_etf_metrics = pd.DataFrame(etf_metrics_list)
