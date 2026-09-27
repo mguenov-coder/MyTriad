@@ -17,7 +17,7 @@ st.set_page_config(
 st.title("🌐 Quantitative Momentum Dashboard (Stocks & UCITS ETFs)")
 st.markdown(
     "**Engine:** Toggle between **Equities** (Deduplicated Master List) and"
-    " **UCITS ETFs** (Ranked by 12-1 & 6-1 Returns)."
+    " **UCITS ETFs** (All 7 ETFs, Unfiltered Ranking)."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -92,9 +92,7 @@ if asset_mode == "Equities (Stocks)":
   use_qmj = st.sidebar.checkbox("Enable FMP QMJ / Quality Filter", value=True)
 else:
   st.sidebar.header("2. ETF Basket Setup")
-  st.sidebar.info(
-      "Basket: SMH, CIBR, DFNS, QDVE, SXRV, UBUT, GOAI\n(Unfiltered Ranking)"
-  )
+  st.sidebar.info("Basket: SMH, CIBR, DFNS, QDVE, SXRV, UBUT, GOAI")
 
 st.sidebar.header("Sorting Controls")
 sort_column = st.sidebar.selectbox(
@@ -1025,29 +1023,28 @@ if reload_data_btn or (
         })
 
   else:
-    # UCITS ETFs Mode
-    status_text.text("Downloading price data for UCITS ETF basket...")
+    # UCITS ETFs Mode (Robust individual loop to guarantee all 7 are captured)
+    status_text.text("Downloading price data for all 7 UCITS ETFs...")
     etf_tickers = ["SMH", "CIBR", "DFNS", "QDVE", "SXRV", "UBUT", "GOAI"]
     etf_metrics_list = []
 
-    try:
-      raw = yf.download(
-          etf_tickers, period="15mo", interval="1d", progress=False
+    for idx, ticker in enumerate(etf_tickers):
+      progress_bar.progress((idx + 1) / len(etf_tickers))
+      status_text.text(
+          f"Fetching data for ETF {ticker} ({idx+1}/{len(etf_tickers)})..."
       )
-      if not raw.empty:
-        if isinstance(raw.columns, pd.MultiIndex):
-          close_df = (
-              raw["Close"] if "Close" in raw.columns.levels[0] else pd.DataFrame()
-          )
-        else:
-          close_df = (
-              pd.DataFrame({etf_tickers[0]: raw["Close"]})
+      try:
+        raw = yf.download(ticker, period="15mo", interval="1d", progress=False)
+        if not raw.empty:
+          series = (
+              raw["Close"]
               if "Close" in raw.columns
-              else pd.DataFrame()
+              else raw.iloc[:, 0].dropna()
           )
+          if isinstance(series, pd.DataFrame):
+            series = series.iloc[:, 0]
+          series = series.dropna()
 
-        for ticker in close_df.columns:
-          series = close_df[ticker].dropna()
           if len(series) > 252:
             price_12m_ago = series.iloc[-252]
             price_6m_ago = (
@@ -1063,8 +1060,8 @@ if reload_data_btn or (
                 "12-1 Return (%)": ret_12_1 * 100.0,
                 "6-1 Return (%)": ret_6_1 * 100.0,
             })
-    except Exception as e:
-      exceptions_log.append(f"ETF download error: {e}")
+      except Exception as e:
+        exceptions_log.append(f"Error fetching ETF {ticker}: {e}")
 
     df_etf_metrics = pd.DataFrame(etf_metrics_list)
     if not df_etf_metrics.empty:
