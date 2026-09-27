@@ -10,13 +10,14 @@ import yfinance as yf
 
 # Page Configuration
 st.set_page_config(
-    page_title="Multi-Index Quantitative Momentum Dashboard", layout="wide"
+    page_title="Multi-Index Quantitative Momentum & ETF Dashboard",
+    layout="wide",
 )
 
-st.title("🌐 Multi-Index Quantitative Momentum Dashboard")
+st.title("🌐 Quantitative Momentum Dashboard (Stocks & UCITS ETFs)")
 st.markdown(
-    "**Engine:** Deduplicated Master List + **6-1 Return & Ranking** + Combined"
-    " Rank + Safe Schema Repair & Dynamic Highlighting."
+    "**Engine:** Toggle between **Equities** (Deduplicated Master List) and"
+    " **UCITS ETFs** (Ranked by 12-1 & 6-1 Returns)."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -58,41 +59,10 @@ if "calculated_metrics" not in st.session_state:
       if persisted_data
       else pd.DataFrame()
   )
-  if not saved_metrics.empty:
-    if (
-        "12-1 Rank" not in saved_metrics.columns
-        and "12-1 Return (%)" in saved_metrics.columns
-    ):
-      saved_metrics["12-1 Rank"] = (
-          saved_metrics["12-1 Return (%)"]
-          .rank(ascending=False, method="min")
-          .astype(int)
-      )
-    if (
-        "6-1 Rank" not in saved_metrics.columns
-        and "6-1 Return (%)" in saved_metrics.columns
-    ):
-      saved_metrics["6-1 Rank"] = (
-          saved_metrics["6-1 Return (%)"]
-          .rank(ascending=False, method="min")
-          .astype(int)
-      )
-    else:
-      if "6-1 Rank" not in saved_metrics.columns:
-        saved_metrics["6-1 Rank"] = saved_metrics.get(
-            "12-1 Rank", pd.Series([1] * len(saved_metrics))
-        )
-    if "Adjusted Rank" not in saved_metrics.columns:
-      saved_metrics["Adjusted Rank"] = saved_metrics.get(
-          "12-1 Rank", pd.Series([1] * len(saved_metrics))
-      )
-    if "Combined Rank" not in saved_metrics.columns:
-      saved_metrics["Combined Rank"] = (
-          saved_metrics["12-1 Rank"]
-          + saved_metrics["6-1 Rank"]
-          + saved_metrics["Adjusted Rank"]
-      )
   st.session_state.calculated_metrics = saved_metrics
+
+if "calculated_etf_metrics" not in st.session_state:
+  st.session_state.calculated_etf_metrics = pd.DataFrame()
 
 if "last_action" not in st.session_state:
   st.session_state.last_action = (
@@ -107,34 +77,41 @@ if "last_action" not in st.session_state:
 exceptions_log = []
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("1. Index Selection Checkboxes")
-show_russell = st.sidebar.checkbox("Russell 1000", value=True)
-show_sp500 = st.sidebar.checkbox("S&P 500", value=True)
-show_nasdaq = st.sidebar.checkbox("Nasdaq 100", value=True)
+st.sidebar.header("1. Asset Class Mode")
+asset_mode = st.sidebar.radio(
+    "Select Strategy Universe", options=["Equities (Stocks)", "UCITS ETFs"]
+)
 
-st.sidebar.header("2. Strategy & Filter Rules")
-use_qmj = st.sidebar.checkbox("Enable FMP QMJ / Quality Filter", value=True)
+if asset_mode == "Equities (Stocks)":
+  st.sidebar.header("2. Index Selection Checkboxes")
+  show_russell = st.sidebar.checkbox("Russell 1000", value=True)
+  show_sp500 = st.sidebar.checkbox("S&P 500", value=True)
+  show_nasdaq = st.sidebar.checkbox("Nasdaq 100", value=True)
 
-st.sidebar.header("3. Table Sorting Controls")
+  st.sidebar.header("3. Strategy & Filter Rules")
+  use_qmj = st.sidebar.checkbox("Enable FMP QMJ / Quality Filter", value=True)
+else:
+  st.sidebar.header("2. ETF Basket Setup")
+  st.sidebar.info(
+      "Basket: SMH, CIBR, DFNS, QDVE, SXRV, UBUT, GOAI\n(Unfiltered Ranking)"
+  )
+
+st.sidebar.header("Sorting Controls")
 sort_column = st.sidebar.selectbox(
     "Sort Table By",
     options=[
         "Combined Rank",
         "12-1 Return (%)",
         "6-1 Return (%)",
-        "Adjusted Rank",
         "12-1 Rank",
         "6-1 Rank",
-        "Volatility (%)",
-        "Market Cap",
-        "Daily Dollar Avg ($)",
         "Ticker",
     ],
     index=0,
 )
 sort_ascending = st.sidebar.checkbox("Sort Ascending", value=True)
 
-st.sidebar.header("4. Execution Controls")
+st.sidebar.header("Execution Controls")
 refresh_lists_btn = st.sidebar.button(
     "🔄 Refresh Constituent Lists (Embedded Data)"
 )
@@ -841,24 +818,26 @@ if refresh_lists_btn or not st.session_state.constituent_dataframes:
     })
 
 
-# --- BUTTON 2: RELOAD DATA & RECALCULATE METRICS WITH PROGRESSIVE BATCHING ---
-if reload_data_btn or st.session_state.calculated_metrics.empty:
-  if not st.session_state.constituent_dataframes:
-    st.warning("Please refresh or load constituent lists first.")
-  else:
-    table_placeholder = st.empty()
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+# --- BUTTON 2: RELOAD DATA & RECALCULATE METRICS ---
+if reload_data_btn or (
+    asset_mode == "Equities (Stocks)"
+    and st.session_state.calculated_metrics.empty
+) or (
+    asset_mode == "UCITS ETFs"
+    and st.session_state.calculated_etf_metrics.empty
+):
+  table_placeholder = st.empty()
+  progress_bar = st.progress(0)
+  status_text = st.empty()
 
+  if asset_mode == "Equities (Stocks)":
     status_text.text(
-        "Building unified master list and applying market cap filter..."
+        "Building unified stock master list and downloading prices..."
     )
-
     dfs = st.session_state.constituent_dataframes
     ticker_to_indices = {}
     ticker_to_mcap = {}
 
-    # 1. Russell 1000
     if show_russell and "Russell 1000" in dfs:
       df_r = dfs["Russell 1000"]
       for _, row in df_r.iterrows():
@@ -876,12 +855,10 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             mcap_val = float(mcap_str)
         except Exception:
           pass
-
         if mcap_val >= 15e9:
           ticker_to_indices.setdefault(t, set()).add("Russell 1000")
           ticker_to_mcap[t] = mcap_val
 
-    # 2. S&P 500
     if show_sp500 and "S&P 500" in dfs:
       df_s = dfs["S&P 500"]
       sym_col = next(
@@ -898,7 +875,6 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
         if t not in ticker_to_mcap:
           ticker_to_mcap[t] = 50e9
 
-    # 3. Nasdaq 100
     if show_nasdaq and "Nasdaq 100" in dfs:
       df_n = dfs["Nasdaq 100"]
       sym_col = next(
@@ -918,34 +894,26 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
     active_tickers = sorted(list(ticker_to_indices.keys()))
     total_tickers = len(active_tickers)
 
-    if total_tickers == 0:
-      st.warning(
-          "No tickers selected or matched the filter criteria. Check your"
-          " index selections."
-      )
-    else:
+    if total_tickers > 0:
       fmp_quality = (
           get_fmp_quality_scores(active_tickers, FMP_KEY) if use_qmj else {}
       )
-
       calculated_metrics_list = []
       chunk_size = 100
 
       for i in range(0, total_tickers, chunk_size):
         chunk = active_tickers[i : i + chunk_size]
         status_text.text(
-            f"Downloading price data for tickers {i+1} to"
+            f"Downloading stock data {i+1} to"
             f" {min(i+chunk_size, total_tickers)} of {total_tickers}..."
         )
         progress_bar.progress(min(1.0, (i + len(chunk)) / total_tickers))
-
         try:
           raw = yf.download(
               chunk, period="15mo", interval="1d", progress=False
           )
           if raw.empty:
             continue
-
           if isinstance(raw.columns, pd.MultiIndex):
             close_df = (
                 raw["Close"] if "Close" in raw.columns.levels[0] else pd.DataFrame()
@@ -1012,8 +980,8 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
                 adj_score = mom_score
 
               mcap = ticker_to_mcap.get(ticker, 20e9)
-
               indices_str = ", ".join(sorted(list(ticker_to_indices[ticker])))
+
               calculated_metrics_list.append({
                   "Ticker": ticker,
                   "Indices": indices_str,
@@ -1025,7 +993,7 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
                   "Adj Score": adj_score,
               })
         except Exception as e:
-          exceptions_log.append(f"Data download chunk error: {e}")
+          exceptions_log.append(f"Stock download error: {e}")
 
       df_metrics = pd.DataFrame(calculated_metrics_list)
       if not df_metrics.empty:
@@ -1049,53 +1017,76 @@ if reload_data_btn or st.session_state.calculated_metrics.empty:
             + df_metrics["6-1 Rank"]
             + df_metrics["Adjusted Rank"]
         )
-
         df_metrics = df_metrics.drop(columns=["Adj Score"])
-        df_metrics = df_metrics.sort_values(by="Combined Rank")
+        st.session_state.calculated_metrics = df_metrics
+        save_persistent_state({
+            "constituent_dataframes": st.session_state.constituent_dataframes,
+            "calculated_metrics": df_metrics,
+        })
 
-        status_text.text("Progressively rendering table in batches...")
-        batch_size = 25
-        for b_end in range(batch_size, len(df_metrics) + batch_size, batch_size):
-          df_batch = df_metrics.iloc[:b_end]
+  else:
+    # UCITS ETFs Mode
+    status_text.text("Downloading price data for UCITS ETF basket...")
+    etf_tickers = ["SMH", "CIBR", "DFNS", "QDVE", "SXRV", "UBUT", "GOAI"]
+    etf_metrics_list = []
 
-          def highlight_by_row_position(df):
-            styles = []
-            for pos in range(len(df)):
-              if pos < 10:
-                c = "background-color: rgba(46, 204, 113, 0.25)"
-              elif pos < 15:
-                c = "background-color: rgba(52, 152, 219, 0.2)"
-              elif pos < 20:
-                c = "background-color: rgba(241, 196, 15, 0.2)"
-              else:
-                c = ""
-              styles.append([c] * len(df.columns))
-            return pd.DataFrame(styles, index=df.index, columns=df.columns)
-
-          table_placeholder.dataframe(
-              df_batch.style.apply(highlight_by_row_position, axis=None).format({
-                  "Market Cap": "{:,.0f}",
-                  "Daily Dollar Avg ($)": "{:,.0f}",
-                  "12-1 Return (%)": "{:.2f}%",
-                  "6-1 Return (%)": "{:.2f}%",
-                  "Volatility (%)": "{:.2f}%",
-              }),
-              use_container_width=True,
-              height=550,
-          )
-          time.sleep(0.05)
-
-      progress_bar.empty()
-      status_text.empty()
-
-      st.session_state.calculated_metrics = df_metrics
-      st.session_state.last_action = (
-          "Master deduplicated list loaded and calculated successfully."
+    try:
+      raw = yf.download(
+          etf_tickers, period="15mo", interval="1d", progress=False
       )
-      save_persistent_state({
-          "constituent_dataframes": st.session_state.constituent_dataframes,
-          "calculated_metrics": df_metrics,
-      })
+      if not raw.empty:
+        if isinstance(raw.columns, pd.MultiIndex):
+          close_df = (
+              raw["Close"] if "Close" in raw.columns.levels[0] else pd.DataFrame()
+          )
+        else:
+          close_df = (
+              pd.DataFrame({etf_tickers[0]: raw["Close"]})
+              if "Close" in raw.columns
+              else pd.DataFrame()
+          )
+
+        for ticker in close_df.columns:
+          series = close_df[ticker].dropna()
+          if len(series) > 252:
+            price_12m_ago = series.iloc[-252]
+            price_6m_ago = (
+                series.iloc[-126] if len(series) >= 126 else series.iloc[0]
+            )
+            price_1m_ago = series.iloc[-21]
+
+            ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
+            ret_6_1 = (price_1m_ago / price_6m_ago) - 1.0
+
+            etf_metrics_list.append({
+                "Ticker": ticker,
+                "12-1 Return (%)": ret_12_1 * 100.0,
+                "6-1 Return (%)": ret_6_1 * 100.0,
+            })
+    except Exception as e:
+      exceptions_log.append(f"ETF download error: {e}")
+
+    df_etf_metrics = pd.DataFrame(etf_metrics_list)
+    if not df_etf_metrics.empty:
+      # Unfiltered ranking purely based on 12-1 and 6-1
+      df_etf_metrics["12-1 Rank"] = (
+          df_etf_metrics["12-1 Return (%)"]
+          .rank(ascending=False, method="min")
+          .astype(int)
+      )
+      df_etf_metrics["6-1 Rank"] = (
+          df_etf_metrics["6-1 Return (%)"]
+          .rank(ascending=False, method="min")
+          .astype(int)
+      )
+      df_etf_metrics["Combined Rank"] = (
+          df_etf_metrics["12-1 Rank"] + df_etf_metrics["6-1 Rank"]
+      )
+      st.session_state.calculated_etf_metrics = df_etf_metrics
+
+  progress_bar.empty()
+  status_text.empty()
+  st.session_state.last_action = f"Data successfully loaded for {asset_mode}."
 
 # --- DISPLAY EXCEPTIONS IF ANY ---
 if exceptions_log:
@@ -1103,84 +1094,104 @@ if exceptions_log:
     for ex in exceptions_log:
       st.warning(ex)
 
-# --- DISPLAY DASHBOARD TABLE & INDEX FILTER ---
-st.subheader("📊 Deduplicated Quantitative Momentum Dashboard")
+# --- DISPLAY DASHBOARD TABLE ---
+st.subheader(
+    f"📊 Momentum Dashboard — {'Equities' if asset_mode == 'Equities (Stocks)' else 'UCITS ETFs'}"
+)
 st.info(f"**Status:** {st.session_state.last_action}")
 
-df_display = st.session_state.calculated_metrics
-
-if df_display.empty:
-  st.warning(
-      "No metrics calculated yet. Click **'🔄 Refresh Constituent Lists'** and"
-      " then **'⚡ Reload Price Data & Recalculate Metrics'** in the sidebar."
-  )
-else:
-  all_index_options = ["Russell 1000", "S&P 500", "Nasdaq 100"]
-  selected_index_filter = st.multiselect(
-      "Filter Displayed Table by Index Membership",
-      options=all_index_options,
-      default=all_index_options,
-  )
-
-
-  def match_index_filter(indices_str):
-    if not selected_index_filter:
-      return True
-    return any(idx in indices_str for idx in selected_index_filter)
-
-
-  df_filtered = df_display[
-      df_display["Indices"].apply(match_index_filter)
-  ].copy()
-
-  if sort_column in df_filtered.columns:
-    df_filtered = df_filtered.sort_values(
-        by=sort_column, ascending=sort_ascending
-    ).reset_index(drop=True)
+if asset_mode == "Equities (Stocks)":
+  df_display = st.session_state.calculated_metrics
+  if df_display.empty:
+    st.warning("No stock metrics calculated yet. Click **Reload Price Data**.")
   else:
-    df_filtered = df_filtered.sort_values(
-        by="Combined Rank", ascending=True
-    ).reset_index(drop=True)
+    all_index_options = ["Russell 1000", "S&P 500", "Nasdaq 100"]
+    selected_index_filter = st.multiselect(
+        "Filter Displayed Table by Index Membership",
+        options=all_index_options,
+        default=all_index_options,
+    )
 
-  st.markdown(
-      f"*Showing {len(df_filtered)} of {len(df_display)} deduplicated stocks.*"
-  )
+    def match_index_filter(indices_str):
+      if not selected_index_filter:
+        return True
+      return any(idx in indices_str for idx in selected_index_filter)
 
-  cols_legend = st.columns(3)
-  cols_legend[0].markdown(
-      "🟩 **Top 1–10 Rows** (Green Highlight)", unsafe_allow_html=True
-  )
-  cols_legend[1].markdown(
-      "🟦 **Top 11–15 Rows** (Blue Highlight)", unsafe_allow_html=True
-  )
-  cols_legend[2].markdown(
-      "🟨 **Top 16–20 Rows** (Yellow Highlight)", unsafe_allow_html=True
-  )
+    df_filtered = df_display[
+        df_display["Indices"].apply(match_index_filter)
+    ].copy()
 
+    if sort_column in df_filtered.columns:
+      df_filtered = df_filtered.sort_values(
+          by=sort_column, ascending=sort_ascending
+      ).reset_index(drop=True)
+    else:
+      df_filtered = df_filtered.sort_values(
+          by="Combined Rank", ascending=True
+      ).reset_index(drop=True)
 
-  def highlight_by_row_position(df):
-    styles = []
-    for pos in range(len(df)):
-      if pos < 10:
-        color = "background-color: rgba(46, 204, 113, 0.25)"
-      elif pos < 15:
-        color = "background-color: rgba(52, 152, 219, 0.2)"
-      elif pos < 20:
-        color = "background-color: rgba(241, 196, 15, 0.2)"
-      else:
-        color = ""
-      styles.append([color] * len(df.columns))
-    return pd.DataFrame(styles, index=df.index, columns=df.columns)
+    st.markdown(
+        f"*Showing {len(df_filtered)} of {len(df_display)} deduplicated stocks.*"
+    )
 
+    def highlight_by_row_position(df):
+      styles = []
+      for pos in range(len(df)):
+        if pos < 10:
+          color = "background-color: rgba(46, 204, 113, 0.25)"
+        elif pos < 15:
+          color = "background-color: rgba(52, 152, 219, 0.2)"
+        elif pos < 20:
+          color = "background-color: rgba(241, 196, 15, 0.2)"
+        else:
+          color = ""
+        styles.append([color] * len(df.columns))
+      return pd.DataFrame(styles, index=df.index, columns=df.columns)
 
-  st.dataframe(
-      df_filtered.style.apply(highlight_by_row_position, axis=None).format({
-          "Market Cap": "{:,.0f}",
-          "Daily Dollar Avg ($)": "{:,.0f}",
-          "12-1 Return (%)": "{:.2f}%",
-          "6-1 Return (%)": "{:.2f}%",
-          "Volatility (%)": "{:.2f}%",
-      }),
-      use_container_width=True,
-      height=550,
-  )
+    st.dataframe(
+        df_filtered.style.apply(highlight_by_row_position, axis=None).format({
+            "Market Cap": "{:,.0f}",
+            "Daily Dollar Avg ($)": "{:,.0f}",
+            "12-1 Return (%)": "{:.2f}%",
+            "6-1 Return (%)": "{:.2f}%",
+            "Volatility (%)": "{:.2f}%",
+        }),
+        use_container_width=True,
+        height=550,
+    )
+
+else:
+  # ETF Table Display (Unfiltered)
+  df_display = st.session_state.calculated_etf_metrics
+  if df_display.empty:
+    st.warning("No ETF metrics calculated yet. Click **Reload Price Data**.")
+  else:
+    df_filtered = df_display.copy()
+    if sort_column in df_filtered.columns:
+      df_filtered = df_filtered.sort_values(
+          by=sort_column, ascending=sort_ascending
+      ).reset_index(drop=True)
+    else:
+      df_filtered = df_filtered.sort_values(
+          by="Combined Rank", ascending=True
+      ).reset_index(drop=True)
+
+    st.markdown(f"*Showing all {len(df_filtered)} unfiltered UCITS ETFs.*")
+
+    def highlight_etf_rows(df):
+      styles = []
+      for pos in range(len(df)):
+        color = (
+            "background-color: rgba(46, 204, 113, 0.25)" if pos == 0 else ""
+        )
+        styles.append([color] * len(df.columns))
+      return pd.DataFrame(styles, index=df.index, columns=df.columns)
+
+    st.dataframe(
+        df_filtered.style.apply(highlight_etf_rows, axis=None).format({
+            "12-1 Return (%)": "{:.2f}%",
+            "6-1 Return (%)": "{:.2f}%",
+        }),
+        use_container_width=True,
+        height=350,
+    )
