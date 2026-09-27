@@ -16,8 +16,8 @@ st.set_page_config(
 
 st.title("🌐 Quantitative Momentum Dashboard (Stocks & UCITS ETFs)")
 st.markdown(
-    "**Engine:** Toggle between **Equities** (Deduplicated Master List) and"
-    " **UCITS ETFs** (All 7 ETFs, Unfiltered Ranking)."
+    "**Engine:** Toggle between **Equities** and **UCITS ETFs** (All 7 ETFs with"
+    " automated European exchange resolution)."
 )
 
 # Load FMP API Key from Streamlit Secrets securely
@@ -92,7 +92,10 @@ if asset_mode == "Equities (Stocks)":
   use_qmj = st.sidebar.checkbox("Enable FMP QMJ / Quality Filter", value=True)
 else:
   st.sidebar.header("2. ETF Basket Setup")
-  st.sidebar.info("Basket: SMH, CIBR, DFNS, QDVE, SXRV, UBUT, GOAI")
+  st.sidebar.info(
+      "Basket: SMH, CIBR, DFNS, QDVE, SXRV, UBUT, GOAI\n(Auto-resolved via"
+      " European/US exchanges)"
+  )
 
 st.sidebar.header("Sorting Controls")
 sort_column = st.sidebar.selectbox(
@@ -1023,49 +1026,83 @@ if reload_data_btn or (
         })
 
   else:
-    # UCITS ETFs Mode (Robust individual loop to guarantee all 7 are captured)
-    status_text.text("Downloading price data for all 7 UCITS ETFs...")
-    etf_tickers = ["SMH", "CIBR", "DFNS", "QDVE", "SXRV", "UBUT", "GOAI"]
+    # UCITS ETFs Mode (Robust multi-exchange suffix search engine)
+    status_text.text(
+        "Downloading price data for all 7 UCITS ETFs across global/European"
+        " exchanges..."
+    )
+    etf_input_symbols = ["SMH", "CIBR", "DFNS", "QDVE", "SXRV", "UBUT", "GOAI"]
     etf_metrics_list = []
 
-    for idx, ticker in enumerate(etf_tickers):
-      progress_bar.progress((idx + 1) / len(etf_tickers))
+    # Map possible international exchange extensions for Yahoo Finance resolution
+    suffixes = [
+        "",
+        ".DE",
+        ".AS",
+        ".PA",
+        ".MI",
+        ".L",
+        ".SW",
+        ".BE",
+        ".DU",
+        ".HM",
+        ".MU",
+        ".SG",
+    ]
+
+    for idx, base_ticker in enumerate(etf_input_symbols):
+      progress_bar.progress((idx + 1) / len(etf_input_symbols))
       status_text.text(
-          f"Fetching data for ETF {ticker} ({idx+1}/{len(etf_tickers)})..."
+          f"Resolving ETF {base_ticker} ({idx+1}/{len(etf_input_symbols)})..."
       )
-      try:
-        raw = yf.download(ticker, period="15mo", interval="1d", progress=False)
-        if not raw.empty:
-          series = (
-              raw["Close"]
-              if "Close" in raw.columns
-              else raw.iloc[:, 0].dropna()
+
+      series = pd.Series(dtype=float)
+      resolved_ticker = base_ticker
+
+      for suffix in suffixes:
+        test_sym = base_ticker + suffix
+        try:
+          raw = yf.download(
+              test_sym, period="15mo", interval="1d", progress=False
           )
-          if isinstance(series, pd.DataFrame):
-            series = series.iloc[:, 0]
-          series = series.dropna()
-
-          if len(series) > 252:
-            price_12m_ago = series.iloc[-252]
-            price_6m_ago = (
-                series.iloc[-126] if len(series) >= 126 else series.iloc[0]
+          if not raw.empty:
+            s = (
+                raw["Close"]
+                if "Close" in raw.columns
+                else raw.iloc[:, 0].dropna()
             )
-            price_1m_ago = series.iloc[-21]
+            if isinstance(s, pd.DataFrame):
+              s = s.iloc[:, 0]
+            s = s.dropna()
+            if len(s) > 100:  # Valid historical price series found
+              series = s
+              resolved_ticker = base_ticker  # Keep original clean display name
+              break
+        except Exception:
+          continue
 
-            ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
-            ret_6_1 = (price_1m_ago / price_6m_ago) - 1.0
+      if not series.empty and len(series) > 252:
+        price_12m_ago = series.iloc[-252]
+        price_6m_ago = (
+            series.iloc[-126] if len(series) >= 126 else series.iloc[0]
+        )
+        price_1m_ago = series.iloc[-21]
 
-            etf_metrics_list.append({
-                "Ticker": ticker,
-                "12-1 Return (%)": ret_12_1 * 100.0,
-                "6-1 Return (%)": ret_6_1 * 100.0,
-            })
-      except Exception as e:
-        exceptions_log.append(f"Error fetching ETF {ticker}: {e}")
+        ret_12_1 = (price_1m_ago / price_12m_ago) - 1.0
+        ret_6_1 = (price_1m_ago / price_6m_ago) - 1.0
+
+        etf_metrics_list.append({
+            "Ticker": resolved_ticker,
+            "12-1 Return (%)": ret_12_1 * 100.0,
+            "6-1 Return (%)": ret_6_1 * 100.0,
+        })
+      else:
+        exceptions_log.append(
+            f"Could not resolve sufficient price history for ETF: {base_ticker}"
+        )
 
     df_etf_metrics = pd.DataFrame(etf_metrics_list)
     if not df_etf_metrics.empty:
-      # Unfiltered ranking purely based on 12-1 and 6-1
       df_etf_metrics["12-1 Rank"] = (
           df_etf_metrics["12-1 Return (%)"]
           .rank(ascending=False, method="min")
